@@ -5,7 +5,6 @@ members = [
     "crates/githook-syntax",
     "crates/githook-eval",
     "crates/githook-git",
-    "crates/githook-lsp",
 ]
 resolver = "2"
 
