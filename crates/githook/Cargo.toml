@@ -1,0 +1,16 @@
+[package]
+name = "githook"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "A flexible githook configuration DSL"
+readme = "../../README.md"
+keywords = ["git", "hooks", "dsl", "pre-commit"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+githook-syntax.workspace = true
+githook-eval.workspace = true
+githook-git.workspace = true
+anyhow.workspace = true

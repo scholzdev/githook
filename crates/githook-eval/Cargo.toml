@@ -1,0 +1,22 @@
+[package]
+name = "githook-eval"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Interpreter and evaluator for githook"
+keywords = ["interpreter", "evaluator"]
+
+[dependencies]
+anyhow.workspace = true
+colored.workspace = true
+regex.workspace = true
+lru.workspace = true
+glob = "0.3"
+atty = "0.2"
+githook-syntax.workspace = true
+githook-git.workspace = true
+dirs = "5.0"
+reqwest = { version = "0.12", features = ["json", "blocking"] }
+tokio = { version = "1", features = ["full"] }
+shell-words = "1.1"

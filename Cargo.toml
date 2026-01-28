@@ -1,0 +1,31 @@
+[workspace]
+members = [
+    "crates/githook",
+    "crates/githook-cli",
+    "crates/githook-syntax",
+    "crates/githook-eval",
+    "crates/githook-git",
+    "crates/githook-lsp",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+authors = ["Florian Scholz <me@florianscholz.dev>"]
+license = "MIT"
+
+[workspace.dependencies]
+clap = { version = "4.5.55", features = ["derive"] }
+anyhow = "1.0.100"
+colored = "3.1.1"
+regex = "1.12.2"
+tempfile = "3.24.0"
+lru = "0.16.3"
+once_cell = "1.21.3"
+rayon = "1.11.0"
+githook = { path = "crates/githook" }
+githook-cli = { path = "crates/githook-cli" }
+githook-syntax = { path = "crates/githook-syntax" }
+githook-eval = { path = "crates/githook-eval" }
+githook-git = { path = "crates/githook-git" }

@@ -1,0 +1,93 @@
+macro is_merge_commit {
+  warn_if true message "This is a merge commit"
+}
+
+macro has_merge_conflicts {
+  foreach file in staged_files matching "*" {
+    block_if content match "^<<<<<<<|^=======|^>>>>>>>" message "Unresolved merge conflicts in {file:path}"
+  }
+}
+
+macro main_branch_protection {
+  block_if branch_name matches "^(main|master)$" message "Direct commits to main/master not allowed. Use a feature branch!"
+}
+
+macro no_large_files {
+  foreach file in staged_files matching "*" {
+    block_if file_size > 1048576 message "File {file:path} is too large. Consider using Git LFS."
+  }
+}
+
+macro large_diff_warning {
+  warn_if modified_lines > 500 message "Large changeset ({modified_lines} lines). Consider splitting into smaller commits."
+}
+
+macro too_many_files {
+  warn_if files_changed > 20 message "{files_changed} files changed. Consider splitting into multiple commits."
+}
+
+macro pre_commit_standard {
+  @no_large_files
+}
+
+macro branch_naming_convention {
+  block_if not branch_name matches "^(feature/|bugfix/|hotfix/|release/)" message "Branch name must start with feature/, bugfix/, hotfix/, or release/"
+}
+
+macro pre_commit_strict {
+  @pre_commit_standard
+  @branch_naming_convention
+  @no_debug_code
+}
+
+macro quick_check {
+  @no_large_files
+  @has_merge_conflicts
+}
+
+# Branch protection
+macro no_main {
+  block_if branch_name == "main" message "Direct commits to main are blocked. Use a feature branch."
+}
+
+macro no_master {
+  block_if branch_name == "master" message "Direct commits to master are blocked. Use a feature branch."
+}
+
+macro feature_only {
+  block_if branch_name matches "^(main|master|develop)$" message "Use a feature/… branch instead of {branch_name}."
+}
+
+macro no_wip {
+  block_if commit_message matches "^(WIP|wip)[ :\-]" message "Remove WIP from commit message."
+}
+
+macro no_merge_commits {
+  block_if commit_message matches "^Merge( branch)? " message "Merge commits are blocked; rebase instead."
+}
+
+macro require_scope {
+  block_if not commit_message matches "^(feat|fix|chore|docs|refactor|perf|test)(\(.+\))?: .+" message "Use a conventional commit with scope: feat(scope): msg"
+}
+
+macro no_secrets {
+  block_if contains_secrets message "Potential secrets detected; remove before committing."
+}
+
+macro no_tokens {
+  block_if diff matches "(api[_-]?key|token|secret)\s*[:=]" message "Possible token/API key detected; remove before committing."
+}
+
+macro no_private_keys {
+  block_if diff matches "BEGIN (RSA|DSA|EC|OPENSSH) PRIVATE KEY" message "Private key material detected; remove before committing."
+}
+
+macro no_large_files_10mb {
+  foreach file in staged_files matching "*" {
+    block_if file_size > 10485760 message "File {file:path} exceeds 10MB; use LFS."
+  }
+}
+
+macro large_diff_strict {
+  block_if modified_lines > 1000 message "Changeset too large ({modified_lines} lines); split into smaller commits."
+}
