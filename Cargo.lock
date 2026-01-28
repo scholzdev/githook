@@ -422,7 +422,7 @@ dependencies = [
 
 [[package]]
 name = "githook"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "githook-eval",
@@ -432,7 +432,7 @@ dependencies = [
 
 [[package]]
 name = "githook-cli"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -447,7 +447,7 @@ dependencies = [
 
 [[package]]
 name = "githook-eval"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "atty",
@@ -465,7 +465,7 @@ dependencies = [
 
 [[package]]
 name = "githook-git"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "lru",
@@ -476,7 +476,7 @@ dependencies = [
 
 [[package]]
 name = "githook-syntax"
-version = "0.0.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
 ]

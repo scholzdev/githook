@@ -1,0 +1,198 @@
+use tower_lsp::lsp_types::*;
+use crate::document::DocumentState;
+use crate::import_resolver::{resolve_import_path, load_imported_macros};
+use tracing::info;
+
+/// Get hover information for the symbol at the given position
+pub fn get_hover(doc: &DocumentState, position: Position, current_uri: &str) -> Option<Hover> {
+    let line_idx = position.line as usize;
+    let lines: Vec<&str> = doc.text.lines().collect();
+    
+    if line_idx >= lines.len() {
+        return None;
+    }
+    
+    let line = lines[line_idx];
+    let char_idx = position.character as usize;
+    
+    if char_idx > line.len() {
+        return None;
+    }
+    
+    // Find word boundaries - include @ and : for macros
+    let word_start = line[..char_idx].rfind(|c: char| !c.is_alphanumeric() && c != '_' && c != '@' && c != ':')
+        .map(|p| p + 1)
+        .unwrap_or(0);
+    
+    let word_end = char_idx + line[char_idx..].find(|c: char| !c.is_alphanumeric() && c != '_' && c != ':')
+        .unwrap_or(line[char_idx..].len());
+    
+    let word = &line[word_start..word_end];
+    
+    info!("Hover word: '{}' at position {}:{}", word, position.line, position.character);
+    
+    // Check for macro call
+    if word.starts_with('@') {
+        let macro_ref = &word[1..];
+        
+        info!("Hover on macro: {}", macro_ref);
+        
+        // Check if namespaced macro (namespace:macro_name)
+        if let Some(colon_pos) = macro_ref.find(':') {
+            let namespace = &macro_ref[..colon_pos];
+            let macro_name = &macro_ref[colon_pos + 1..];
+            
+            info!("Namespaced macro: {}:{}", namespace, macro_name);
+            info!("Available imports: {:?}", doc.imports);
+            
+            // Find the import with this alias
+            for (alias, import_path) in &doc.imports {
+                if alias == namespace {
+                    info!("Found import: {} -> {}", alias, import_path);
+                    
+                    // Resolve and load the imported file
+                    if let Some(resolved_path) = resolve_import_path(current_uri, import_path) {
+                        info!("Resolved path: {:?}", resolved_path);
+                        
+                        if let Ok(imported_macros) = load_imported_macros(&resolved_path) {
+                            info!("Loaded {} macros from import", imported_macros.len());
+                            
+                            // Find the macro
+                            for (name, _span, body) in imported_macros {
+                                if name == macro_name {
+                                    info!("Found macro {} in imports", name);
+                                    let body_str = format_macro_body(&body);
+                                    return Some(create_hover(&format!(
+                                        "**Macro:** `{}` (from `{}`)\n\n```githook\nmacro {} {{\n{}}}\n```",
+                                        name, alias, name, body_str
+                                    )));
+                                }
+                            }
+                        } else {
+                            info!("Failed to load macros from {:?}", resolved_path);
+                        }
+                    } else {
+                        info!("Failed to resolve import path: {}", import_path);
+                    }
+                    break;
+                }
+            }
+            
+            // Not found in imports
+            info!("Macro not found in imports");
+            return Some(create_hover(&format!("**Macro:** `@{}:{}`\n\nNamespaced macro (not resolved)", namespace, macro_name)));
+        }
+        
+        // Local macro (no namespace)
+        let macro_name = macro_ref;
+        
+        // Find the macro definition
+        for (name, _span, body) in &doc.macro_definitions {
+            if name == macro_name {
+                // Format the macro body
+                let body_str = format_macro_body(body);
+                return Some(create_hover(&format!(
+                    "**Macro:** `{}`\n\n```githook\nmacro {} {{\n{}}}\n```",
+                    name, name, body_str
+                )));
+            }
+        }
+        
+        // If not found locally, just show it's a macro
+        if doc.macros.contains(&macro_name.to_string()) {
+            return Some(create_hover(&format!("**Macro:** `{}`\n\nUser-defined macro", macro_name)));
+        }
+    }
+    
+    // Check for keywords
+    let keyword_docs = get_keyword_documentation(word);
+    if let Some(docs) = keyword_docs {
+        return Some(create_hover(docs));
+    }
+    
+    // Check for properties
+    let property_docs = get_property_documentation(word);
+    if let Some(docs) = property_docs {
+        return Some(create_hover(docs));
+    }
+    
+    None
+}
+
+fn create_hover(markdown: &str) -> Hover {
+    Hover {
+        contents: HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: markdown.to_string(),
+        }),
+        range: None,
+    }
+}
+
+fn get_keyword_documentation(keyword: &str) -> Option<&'static str> {
+    match keyword {
+        "run" => Some("**run** `\"command\"`\n\nExecute a shell command.\n\n**Example:**\n```githook\nrun \"cargo test\"\nrun \"npm run lint\"\n```"),
+        "block" => Some("**block** `\"message\"`\n\nBlock the commit with a message.\n\n**Example:**\n```githook\nblock \"Direct commits not allowed\"\n```"),
+        "block_if" => Some("**block_if** `<condition>` **message** `\"text\"`\n\nBlock commit if condition is true.\n\n**Example:**\n```githook\nblock_if branch_name == \"main\" message \"No commits to main\"\nblock_if file_size > 1000000 message \"File too large\"\n```"),
+        "warn_if" => Some("**warn_if** `<condition>` **message** `\"text\"`\n\nWarn if condition is true (non-blocking).\n\n**Example:**\n```githook\nwarn_if modified_lines > 500 message \"Large changeset\"\n```"),
+        "when" => Some("**when** `<condition>` **{** ... **}**\n\nConditional execution block.\n\n**Example:**\n```githook\nwhen branch_name == \"main\" {\n    run \"npm test\"\n    block_if content matches \"TODO\"\n}\n```"),
+        "foreach" => Some("**foreach** `file` **in** `<collection>` **matching** `\"pattern\"` **{** ... **}**\n\nIterate over files.\n\n**Example:**\n```githook\nforeach file in staged_files matching \"*.rs\" {\n    block_if content matches \"panic!\"\n}\n```"),
+        "match" => Some("**match** `<value>` **{** ... **}**\n\nPattern matching.\n\n**Example:**\n```githook\nmatch file {\n    \"*.rs\" -> run \"cargo clippy\"\n    \"*.js\" -> run \"npm run lint\"\n    _ -> run \"echo 'unknown'\"\n}\n```"),
+        "macro" => Some("**macro** `name` **{** ... **}**\n\nDefine a reusable macro.\n\n**Example:**\n```githook\nmacro check_main {\n    block_if branch_name == \"main\"\n}\n\n@check_main  # Call the macro\n```"),
+        "let" => Some("**let** `name` **=** `[...]`\n\nDefine a variable (string list).\n\n**Example:**\n```githook\nlet forbidden = [\".txt\", \".zip\"]\n\nforeach file in staged_files {\n    block_if {file:extension} in {forbidden}\n}\n```"),
+        "use" => Some("**use** `@namespace/package`\n\nImport from remote package (GitHub).\n\n**Example:**\n```githook\nuse @preview/security\n\n@no_secrets\n```"),
+        "import" => Some("**import** `\"path/to/file.ghook\"`\n\nImport from local file.\n\n**Example:**\n```githook\nimport \"./common.ghook\"\n```"),
+        _ => None,
+    }
+}
+
+fn get_property_documentation(property: &str) -> Option<&'static str> {
+    match property {
+        "branch_name" => Some("**branch_name**: String\n\nCurrent Git branch name.\n\n**Example:**\n```githook\nblock_if branch_name == \"main\"\nblock_if branch_name matches \"^feature/\"\n```"),
+        "content" => Some("**content**: String\n\nStaged file content.\n\n**Example:**\n```githook\nblock_if content matches \"TODO\"\nblock_if content contains \"panic!\"\n```"),
+        "staged_content" => Some("**staged_content**: String\n\nStaged file content (alias for content).\n\n**Example:**\n```githook\nblock_if staged_content matches \"console.log\"\n```"),
+        "diff" => Some("**diff**: String\n\nStaged changes diff.\n\n**Example:**\n```githook\nblock_if diff matches \"^-.*password\"\n```"),
+        "commit_message" => Some("**commit_message**: String\n\nCommit message text.\n\n**Example:**\n```githook\nblock_if commit_message contains \"WIP\"\n```"),
+        "file_size" => Some("**file_size**: Number\n\nFile size in bytes.\n\n**Example:**\n```githook\nblock_if file_size > 1048576 message \"File > 1MB\"\n```"),
+        "modified_lines" => Some("**modified_lines**: Number\n\nChanged lines in diff.\n\n**Example:**\n```githook\nwarn_if modified_lines > 500\n```"),
+        "files_changed" => Some("**files_changed**: Number\n\nNumber of changed files.\n\n**Example:**\n```githook\nwarn_if files_changed > 20\n```"),
+        "additions" => Some("**additions**: Number\n\nAdded lines.\n\n**Example:**\n```githook\nblock_if additions > 1000\n```"),
+        "deletions" => Some("**deletions**: Number\n\nDeleted lines.\n\n**Example:**\n```githook\nblock_if deletions > 500\n```"),
+        "commits_ahead" => Some("**commits_ahead**: Number\n\nCommits ahead of remote.\n\n**Example:**\n```githook\nblock_if commits_ahead > 5\n```"),
+        "author_set" => Some("**author_set**: Boolean\n\nGit user.name is configured.\n\n**Example:**\n```githook\nblock_if not author_set message \"Configure git user\"\n```"),
+        "author_email_set" => Some("**author_email_set**: Boolean\n\nGit user.email is configured.\n\n**Example:**\n```githook\nblock_if not author_email_set\n```"),
+        "contains_secrets" => Some("**contains_secrets**: Boolean\n\nSecrets/credentials detected.\n\n**Example:**\n```githook\nblock_if contains_secrets message \"Secrets found!\"\n```"),
+        "staged_files" => Some("**staged_files**: File Collection\n\nAll staged files (for foreach).\n\n**Example:**\n```githook\nforeach file in staged_files matching \"*.rs\" {\n    block_if content matches \"panic!\"\n}\n```"),
+        "all_files" => Some("**all_files**: File Collection\n\nAll files in repo (for foreach).\n\n**Example:**\n```githook\nforeach file in all_files matching \"*.md\" {\n    warn_if file_size > 100000\n}\n```"),
+        _ => None,
+    }
+}
+
+/// Format macro body for display
+fn format_macro_body(body: &[githook_syntax::Statement]) -> String {
+    let mut result = String::new();
+    for stmt in body {
+        let line = match stmt {
+            githook_syntax::Statement::Run(cmd, _) => format!("    run \"{}\"", cmd),
+            githook_syntax::Statement::Block(msg, _) => format!("    block \"{}\"", msg),
+            githook_syntax::Statement::ConditionalRule { severity, message, .. } => {
+                let action_str = match severity {
+                    githook_syntax::RuleSeverity::Block(_) => "block_if",
+                    githook_syntax::RuleSeverity::Warn(_) => "warn_if",
+                };
+                format!("    {} ... message \"{}\"", action_str, message.as_deref().unwrap_or(""))
+            }
+            githook_syntax::Statement::MacroCall { name, namespace, .. } => {
+                if let Some(ns) = namespace {
+                    format!("    @{}:{}", ns, name)
+                } else {
+                    format!("    @{}", name)
+                }
+            }
+            _ => "    ...".to_string(),
+        };
+        result.push_str(&line);
+        result.push('\n');
+    }
+    result
+}
