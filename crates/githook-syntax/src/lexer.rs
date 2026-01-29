@@ -1,105 +1,110 @@
 use crate::error::{Span, LexError};
-use anyhow::Result;
+
+// ============================================================================
+// SIMPLIFIED TOKEN SYSTEM
+// ============================================================================
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
+    // Core Keywords
     Run,
     Block,
-    Group,
-    Severity,
-    Enabled,
-    Require,
+    Warn,
     Allow,
-    File,
     Parallel,
+    
     Let,
-    StagedFiles,
-    AllFiles,
-    BranchName,
-    CommitMessage,
-    AuthorEmail,
-    AuthorSet,
-    AuthorEmailSet,
-    AuthorMissing,
-    ModifiedLines,
-    FilesChanged,
-    Additions,
-    Deletions,
-    CommitsAhead,
-    FileExists,
-    FileSize,
-    Content,
-    StagedContent,
-    Diff,
-    BeStaged,
     Foreach,
-    Matches,
-    Matching,
-    Must,
+    If,
+    Else,
     Match,
-    Contain,
-    Contains,
-    BlockIf,
-    ContainsSecrets,
-    WarnIf,
-    Greater,
-    GreaterOrEqual,
-    Less,
-    LessOrEqual,
-    Equals,
-    Message,
-    With,
-    Interactive,
-    Ask,
-    Env,
-    True,
-    False,
-    Identifier(String),
-    String(String),
-    Number(f64),
-    At,
+    Where,
+    Try,
+    Catch,
+    Break,
+    Continue,
+    
+    Macro,
+    Import,
+    Use,
+    Group,
+    
+    // Logical
     In,
-    MacroName(String),
     Not,
     And,
     Or,
-    Comma,
-    Where,
-    When,
-    Else,
-    Use,
-    Import,
-    Macro,
-    LeftBrace,
-    RightBrace,
-    LeftBracket,
-    RightBracket,
-    LeftParen,
-    RightParen,
+    
+    // Literals
+    True,
+    False,
+    Null,
+    
+    // Comparison Operators
+    Eq,        // ==
+    Ne,        // !=
+    Lt,        // <
+    Le,        // <=
+    Gt,        // >
+    Ge,        // >=
+    
+    // Arithmetic Operators
+    Plus,      // +
+    Minus,     // -
+    Star,      // *
+    Slash,     // /
+    Percent,   // %
+    
+    // Assignment
+    Assign,    // =
+    
+    // Delimiters
+    LeftBrace,     // {
+    RightBrace,    // }
+    LeftBracket,   // [
+    RightBracket,  // ]
+    LeftParen,     // (
+    RightParen,    // )
+    
+    // Punctuation
+    Dot,           // .
+    Comma,         // ,
+    Colon,         // :
+    Arrow,         // ->
+    FatArrow,      // =>
+    
+    // Special
+    At,            // @ (for macros)
+    Dollar,        // $ (for interpolation)
+    
+    // Values
+    Identifier(String),
+    String(String),
+    Number(f64),
+    
+    // Metadata
     Newline,
-    DoubleEquals,
-    Colon,
-    Slash,
-    DoubleQuote,
-    Arrow,
-    NotEquals,
     Comment(String),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct SpannedToken {
     pub token: Token,
     pub span: Span,
 }
 
-pub fn tokenize_with_spans(input: &str) -> Result<Vec<SpannedToken>, LexError> {
-    let mut tokens = Vec::with_capacity(input.len() / 4);
+// ============================================================================
+// LEXER IMPLEMENTATION
+// ============================================================================
+
+pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
+    let mut tokens = Vec::new();
     let mut chars = input.chars().peekable();
-
-    let mut line: usize = 1;
-    let mut col: usize = 1;
-    let mut offset: usize = 0;
-
+    
+    let mut line = 1;
+    let mut col = 1;
+    let mut offset = 0;
+    
     let bump = |ch: char, line: &mut usize, col: &mut usize, offset: &mut usize| {
         if ch == '\n' {
             *line += 1;
@@ -109,273 +114,33 @@ pub fn tokenize_with_spans(input: &str) -> Result<Vec<SpannedToken>, LexError> {
         }
         *offset += ch.len_utf8();
     };
-
+    
     while let Some(&ch) = chars.peek() {
         let start_line = line;
         let start_col = col;
         let start_offset = offset;
-
+        
         match ch {
+            // Whitespace
             ' ' | '\t' | '\r' => {
                 chars.next();
                 bump(ch, &mut line, &mut col, &mut offset);
             }
+            
             '\n' => {
                 chars.next();
                 bump(ch, &mut line, &mut col, &mut offset);
-                tokens.push(SpannedToken { 
-                    token: Token::Newline, 
-                    span: Span::new(start_line, start_col, start_offset, offset) 
+                tokens.push(SpannedToken {
+                    token: Token::Newline,
+                    span: Span::new(start_line, start_col, start_offset, offset),
                 });
             }
-            '{' => {
-                chars.next();
-                bump(ch, &mut line, &mut col, &mut offset);
-                tokens.push(SpannedToken { 
-                    token: Token::LeftBrace, 
-                    span: Span::new(start_line, start_col, start_offset, offset) 
-                });
-            }
-            '}' => {
-                chars.next();
-                bump(ch, &mut line, &mut col, &mut offset);
-                tokens.push(SpannedToken { 
-                    token: Token::RightBrace, 
-                    span: Span::new(start_line, start_col, start_offset, offset) 
-                });
-            }
-            ')' => {
-                chars.next();
-                bump(ch, &mut line, &mut col, &mut offset);
-                tokens.push(SpannedToken { 
-                    token: Token::RightParen, 
-                    span: Span::new(start_line, start_col, start_offset, offset) 
-                });
-            }
-            '(' => {
-                chars.next();
-                bump(ch, &mut line, &mut col, &mut offset);
-                tokens.push(SpannedToken { 
-                    token: Token::LeftParen, 
-                    span: Span::new(start_line, start_col, start_offset, offset) 
-                });
-            }
-            '[' => {
-                chars.next();
-                bump(ch, &mut line, &mut col, &mut offset);
-                tokens.push(SpannedToken { 
-                    token: Token::LeftBracket, 
-                    span: Span::new(start_line, start_col, start_offset, offset) 
-                });
-            }
-            ']' => {
-                chars.next();
-                bump(ch, &mut line, &mut col, &mut offset);
-                tokens.push(SpannedToken { 
-                    token: Token::RightBracket, 
-                    span: Span::new(start_line, start_col, start_offset, offset) 
-                });
-            }
-            ',' => {
-                chars.next();
-                bump(ch, &mut line, &mut col, &mut offset);
-                tokens.push(SpannedToken { 
-                    token: Token::Comma, 
-                    span: Span::new(start_line, start_col, start_offset, offset) 
-                });
-            }
-            '>' => {
-                chars.next();
-                bump(ch, &mut line, &mut col, &mut offset);
-                if matches!(chars.peek(), Some('=')) {
-                    chars.next();
-                    bump('=', &mut line, &mut col, &mut offset);
-                    tokens.push(SpannedToken { 
-                        token: Token::GreaterOrEqual, 
-                        span: Span::new(start_line, start_col, start_offset, offset) 
-                    });
-                } else {
-                    tokens.push(SpannedToken { 
-                        token: Token::Greater, 
-                        span: Span::new(start_line, start_col, start_offset, offset) 
-                    });
-                }
-            }
-            '<' => {
-                chars.next();
-                bump(ch, &mut line, &mut col, &mut offset);
-                if matches!(chars.peek(), Some('=')) {
-                    chars.next();
-                    bump('=', &mut line, &mut col, &mut offset);
-                    tokens.push(SpannedToken { 
-                        token: Token::LessOrEqual, 
-                        span: Span::new(start_line, start_col, start_offset, offset) 
-                    });
-                } else {
-                    tokens.push(SpannedToken { 
-                        token: Token::Less, 
-                        span: Span::new(start_line, start_col, start_offset, offset) 
-                    });
-                }
-            }
-            '=' => {
-                chars.next();
-                bump(ch, &mut line, &mut col, &mut offset);
-                if matches!(chars.peek(), Some('=')) {
-                    chars.next();
-                    bump('=', &mut line, &mut col, &mut offset);
-                    tokens.push(SpannedToken { 
-                        token: Token::DoubleEquals, 
-                        span: Span::new(start_line, start_col, start_offset, offset) 
-                    });
-                } else {
-                    tokens.push(SpannedToken { 
-                        token: Token::Equals, 
-                        span: Span::new(start_line, start_col, start_offset, offset) 
-                    });
-                }
-            }
-            ':' => {
-                chars.next();
-                bump(ch, &mut line, &mut col, &mut offset);
-                tokens.push(SpannedToken { 
-                    token: Token::Colon, 
-                    span: Span::new(start_line, start_col, start_offset, offset) 
-                });
-            }
-            '/' => {
-                let slash_line = line;
-                let slash_col = col;
-                let slash_offset = offset;
-                
-                chars.next();
-                bump('/', &mut line, &mut col, &mut offset);
-                
-                if let Some(&'*') = chars.peek() {
-                    chars.next();
-                    bump('*', &mut line, &mut col, &mut offset);
-                    
-                    let mut comment = String::from("/*");
-                    let mut found_end = false;
-                    
-                    while let Some(&ch) = chars.peek() {
-                        chars.next();
-                        bump(ch, &mut line, &mut col, &mut offset);
-                        comment.push(ch);
-                        
-                        if ch == '*' {
-                            if let Some(&'/') = chars.peek() {
-                                chars.next();
-                                bump('/', &mut line, &mut col, &mut offset);
-                                comment.push('/');
-                                found_end = true;
-                                break;
-                            }
-                        }
-                    }
-                    
-                    if !found_end {
-                        return Err(LexError::UnterminatedComment { 
-                            span: Span::new(slash_line, slash_col, slash_offset, offset)
-                        });
-                    }
-                    
-                    tokens.push(SpannedToken {
-                        token: Token::Comment(comment),
-                        span: Span::new(slash_line, slash_col, slash_offset, offset)
-                    });
-                } else {
-                    return Err(LexError::UnexpectedChar { 
-                        ch: '/', 
-                        span: Span::new(slash_line, slash_col, slash_offset, offset),
-                        suggestion: Some("/*...*/".to_string())
-                    });
-                }
-            }
-            '!' => {
-                chars.next();
-                bump(ch, &mut line, &mut col, &mut offset);
-                if matches!(chars.peek(), Some('=')) {
-                    chars.next();
-                    bump('=', &mut line, &mut col, &mut offset);
-                    tokens.push(SpannedToken { 
-                        token: Token::NotEquals, 
-                        span: Span::new(start_line, start_col, start_offset, offset) 
-                    });
-                } else {
-                    return Err(LexError::UnexpectedChar { 
-                        ch: '!', 
-                        span: Span::new(start_line, start_col, start_offset, offset),
-                        suggestion: Some("!=".to_string())
-                    });
-                }
-            }
-            '-' => {
-                chars.next();
-                bump(ch, &mut line, &mut col, &mut offset);
-                if matches!(chars.peek(), Some('>')) {
-                    chars.next();
-                    bump('>', &mut line, &mut col, &mut offset);
-                    tokens.push(SpannedToken { 
-                        token: Token::Arrow, 
-                        span: Span::new(start_line, start_col, start_offset, offset) 
-                    });
-                } else {
-                    return Err(LexError::UnexpectedChar { 
-                        ch: '-', 
-                        span: Span::new(start_line, start_col, start_offset, offset),
-                        suggestion: Some("->".to_string())
-                    });
-                }
-            }
-            '@' => {
-                chars.next();
-                bump(ch, &mut line, &mut col, &mut offset);
-                let mut name = String::new();
-                while let Some(&ch) = chars.peek() {
-                    if ch.is_alphanumeric() || ch == '_' || ch == ':' {
-                        name.push(ch);
-                        chars.next();
-                        bump(ch, &mut line, &mut col, &mut offset);
-                    } else {
-                        break;
-                    }
-                }
-                if name.is_empty() {
-                    return Err(LexError::UnexpectedEof { 
-                        expected: "macro name".to_string(),
-                        span: Span::new(start_line, start_col, start_offset, offset)
-                    });
-                }
-                tokens.push(SpannedToken { 
-                    token: Token::MacroName(name), 
-                    span: Span::new(start_line, start_col, start_offset, offset) 
-                });
-            }
-            '"' => {
-                chars.next();
-                bump(ch, &mut line, &mut col, &mut offset);
-                let mut string = String::new();
-                while let Some(&ch) = chars.peek() {
-                    if ch == '"' {
-                        chars.next();
-                        bump(ch, &mut line, &mut col, &mut offset);
-                        break;
-                    }
-                    string.push(ch);
-                    chars.next();
-                    bump(ch, &mut line, &mut col, &mut offset);
-                }
-                tokens.push(SpannedToken { 
-                    token: Token::String(string), 
-                    span: Span::new(start_line, start_col, start_offset, offset) 
-                });
-            }
+            
+            // Comments
             '#' => {
-                let start_line = line;
-                let start_col = col;
-                let start_offset = offset;
-                let mut comment = String::from("#");
+                let mut comment = String::new();
+                chars.next();
+                bump(ch, &mut line, &mut col, &mut offset);
                 
                 while let Some(&ch) = chars.peek() {
                     if ch == '\n' {
@@ -388,35 +153,365 @@ pub fn tokenize_with_spans(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                 
                 tokens.push(SpannedToken {
                     token: Token::Comment(comment),
-                    span: Span::new(start_line, start_col, start_offset, offset)
+                    span: Span::new(start_line, start_col, start_offset, offset),
                 });
             }
-            _ if ch.is_ascii_digit() => {
-                let mut number = String::new();
+            
+            // Strings
+            '"' => {
+                chars.next();
+                bump(ch, &mut line, &mut col, &mut offset);
+                
+                let mut string = String::new();
+                let mut escaped = false;
+                
+                while let Some(&ch) = chars.peek() {
+                    if escaped {
+                        string.push(match ch {
+                            'n' => '\n',
+                            't' => '\t',
+                            'r' => '\r',
+                            '\\' => '\\',
+                            '"' => '"',
+                            _ => ch,
+                        });
+                        escaped = false;
+                    } else if ch == '\\' {
+                        escaped = true;
+                    } else if ch == '"' {
+                        chars.next();
+                        bump(ch, &mut line, &mut col, &mut offset);
+                        break;
+                    } else {
+                        string.push(ch);
+                    }
+                    chars.next();
+                    bump(ch, &mut line, &mut col, &mut offset);
+                }
+                
+                tokens.push(SpannedToken {
+                    token: Token::String(string),
+                    span: Span::new(start_line, start_col, start_offset, offset),
+                });
+            }
+            
+            // Numbers
+            '0'..='9' => {
+                let mut num_str = String::new();
                 while let Some(&ch) = chars.peek() {
                     if ch.is_ascii_digit() || ch == '.' {
-                        number.push(ch);
+                        num_str.push(ch);
                         chars.next();
                         bump(ch, &mut line, &mut col, &mut offset);
                     } else {
                         break;
                     }
                 }
-                match number.parse::<f64>() {
-                    Ok(n) => tokens.push(SpannedToken { 
-                        token: Token::Number(n), 
-                        span: Span::new(start_line, start_col, start_offset, offset) 
-                    }),
-                    Err(_) => return Err(LexError::InvalidNumber {
-                        text: number,
-                        span: Span::new(start_line, start_col, start_offset, offset)
-                    })
+                
+                let mut num = num_str.parse::<f64>()
+                    .map_err(|_| LexError::InvalidNumber {
+                        text: num_str,
+                        span: Span::new(start_line, start_col, start_offset, offset),
+                    })?;
+                
+                // Check for size unit suffix (KB, MB, GB, TB)
+                if let Some(&ch) = chars.peek() {
+                    if ch.is_alphabetic() {
+                        let mut unit = String::new();
+                        while let Some(&ch) = chars.peek() {
+                            if ch.is_alphabetic() {
+                                unit.push(ch);
+                                chars.next();
+                                bump(ch, &mut line, &mut col, &mut offset);
+                            } else {
+                                break;
+                            }
+                        }
+                        
+                        // Apply multiplier based on unit
+                        match unit.to_uppercase().as_str() {
+                            "KB" => num *= 1024.0,
+                            "MB" => num *= 1024.0 * 1024.0,
+                            "GB" => num *= 1024.0 * 1024.0 * 1024.0,
+                            "TB" => num *= 1024.0 * 1024.0 * 1024.0 * 1024.0,
+                            _ => {
+                                return Err(LexError::UnexpectedChar {
+                                    ch: unit.chars().next().unwrap(),
+                                    span: Span::new(start_line, start_col, start_offset, offset),
+                                    suggestion: Some(format!("Unknown size unit: {}. Use KB, MB, GB, or TB", unit)),
+                                });
+                            }
+                        }
+                    }
+                }
+                
+                tokens.push(SpannedToken {
+                    token: Token::Number(num),
+                    span: Span::new(start_line, start_col, start_offset, offset),
+                });
+            }
+            
+            // Operators
+            '=' => {
+                chars.next();
+                bump(ch, &mut line, &mut col, &mut offset);
+                
+                if chars.peek() == Some(&'=') {
+                    chars.next();
+                    bump('=', &mut line, &mut col, &mut offset);
+                    tokens.push(SpannedToken {
+                        token: Token::Eq,
+                        span: Span::new(start_line, start_col, start_offset, offset),
+                    });
+                } else if chars.peek() == Some(&'>') {
+                    chars.next();
+                    bump('>', &mut line, &mut col, &mut offset);
+                    tokens.push(SpannedToken {
+                        token: Token::FatArrow,
+                        span: Span::new(start_line, start_col, start_offset, offset),
+                    });
+                } else {
+                    // Single = for assignment
+                    tokens.push(SpannedToken {
+                        token: Token::Assign,
+                        span: Span::new(start_line, start_col, start_offset, offset),
+                    });
                 }
             }
+            
+            '!' => {
+                chars.next();
+                bump(ch, &mut line, &mut col, &mut offset);
+                
+                if chars.peek() == Some(&'=') {
+                    chars.next();
+                    bump('=', &mut line, &mut col, &mut offset);
+                    tokens.push(SpannedToken {
+                        token: Token::Ne,
+                        span: Span::new(start_line, start_col, start_offset, offset),
+                    });
+                } else {
+                    return Err(LexError::UnexpectedChar {
+                        ch: '!',
+                        span: Span::new(start_line, start_col, start_offset, offset),
+                        suggestion: Some("Did you mean '!='?".to_string()),
+                    });
+                }
+            }
+            
+            '<' => {
+                chars.next();
+                bump(ch, &mut line, &mut col, &mut offset);
+                
+                if chars.peek() == Some(&'=') {
+                    chars.next();
+                    bump('=', &mut line, &mut col, &mut offset);
+                    tokens.push(SpannedToken {
+                        token: Token::Le,
+                        span: Span::new(start_line, start_col, start_offset, offset),
+                    });
+                } else {
+                    tokens.push(SpannedToken {
+                        token: Token::Lt,
+                        span: Span::new(start_line, start_col, start_offset, offset),
+                    });
+                }
+            }
+            
+            '>' => {
+                chars.next();
+                bump(ch, &mut line, &mut col, &mut offset);
+                
+                if chars.peek() == Some(&'=') {
+                    chars.next();
+                    bump('=', &mut line, &mut col, &mut offset);
+                    tokens.push(SpannedToken {
+                        token: Token::Ge,
+                        span: Span::new(start_line, start_col, start_offset, offset),
+                    });
+                } else {
+                    tokens.push(SpannedToken {
+                        token: Token::Gt,
+                        span: Span::new(start_line, start_col, start_offset, offset),
+                    });
+                }
+            }
+            
+            '-' => {
+                chars.next();
+                bump(ch, &mut line, &mut col, &mut offset);
+                
+                if chars.peek() == Some(&'>') {
+                    chars.next();
+                    bump('>', &mut line, &mut col, &mut offset);
+                    tokens.push(SpannedToken {
+                        token: Token::Arrow,
+                        span: Span::new(start_line, start_col, start_offset, offset),
+                    });
+                } else {
+                    // Just minus operator
+                    tokens.push(SpannedToken {
+                        token: Token::Minus,
+                        span: Span::new(start_line, start_col, start_offset, offset),
+                    });
+                }
+            }
+            
+            '+' => {
+                chars.next();
+                bump(ch, &mut line, &mut col, &mut offset);
+                tokens.push(SpannedToken {
+                    token: Token::Plus,
+                    span: Span::new(start_line, start_col, start_offset, offset),
+                });
+            }
+            
+            '*' => {
+                chars.next();
+                bump(ch, &mut line, &mut col, &mut offset);
+                tokens.push(SpannedToken {
+                    token: Token::Star,
+                    span: Span::new(start_line, start_col, start_offset, offset),
+                });
+            }
+            
+            '/' => {
+                chars.next();
+                bump(ch, &mut line, &mut col, &mut offset);
+                
+                // Check for comment
+                if chars.peek() == Some(&'/') {
+                    // Line comment
+                    chars.next();
+                    bump('/', &mut line, &mut col, &mut offset);
+                    
+                    let mut comment = String::new();
+                    while let Some(&ch) = chars.peek() {
+                        if ch == '\n' {
+                            break;
+                        }
+                        chars.next();
+                        bump(ch, &mut line, &mut col, &mut offset);
+                        comment.push(ch);
+                    }
+                    
+                    tokens.push(SpannedToken {
+                        token: Token::Comment(comment.trim().to_string()),
+                        span: Span::new(start_line, start_col, start_offset, offset),
+                    });
+                } else {
+                    // Division operator
+                    tokens.push(SpannedToken {
+                        token: Token::Slash,
+                        span: Span::new(start_line, start_col, start_offset, offset),
+                    });
+                }
+            }
+            
+            '%' => {
+                chars.next();
+                bump(ch, &mut line, &mut col, &mut offset);
+                tokens.push(SpannedToken {
+                    token: Token::Percent,
+                    span: Span::new(start_line, start_col, start_offset, offset),
+                });
+            }
+            
+            // Single-char tokens
+            '{' => {
+                chars.next();
+                bump(ch, &mut line, &mut col, &mut offset);
+                tokens.push(SpannedToken {
+                    token: Token::LeftBrace,
+                    span: Span::new(start_line, start_col, start_offset, offset),
+                });
+            }
+            '}' => {
+                chars.next();
+                bump(ch, &mut line, &mut col, &mut offset);
+                tokens.push(SpannedToken {
+                    token: Token::RightBrace,
+                    span: Span::new(start_line, start_col, start_offset, offset),
+                });
+            }
+            '[' => {
+                chars.next();
+                bump(ch, &mut line, &mut col, &mut offset);
+                tokens.push(SpannedToken {
+                    token: Token::LeftBracket,
+                    span: Span::new(start_line, start_col, start_offset, offset),
+                });
+            }
+            ']' => {
+                chars.next();
+                bump(ch, &mut line, &mut col, &mut offset);
+                tokens.push(SpannedToken {
+                    token: Token::RightBracket,
+                    span: Span::new(start_line, start_col, start_offset, offset),
+                });
+            }
+            '(' => {
+                chars.next();
+                bump(ch, &mut line, &mut col, &mut offset);
+                tokens.push(SpannedToken {
+                    token: Token::LeftParen,
+                    span: Span::new(start_line, start_col, start_offset, offset),
+                });
+            }
+            ')' => {
+                chars.next();
+                bump(ch, &mut line, &mut col, &mut offset);
+                tokens.push(SpannedToken {
+                    token: Token::RightParen,
+                    span: Span::new(start_line, start_col, start_offset, offset),
+                });
+            }
+            '.' => {
+                chars.next();
+                bump(ch, &mut line, &mut col, &mut offset);
+                tokens.push(SpannedToken {
+                    token: Token::Dot,
+                    span: Span::new(start_line, start_col, start_offset, offset),
+                });
+            }
+            ',' => {
+                chars.next();
+                bump(ch, &mut line, &mut col, &mut offset);
+                tokens.push(SpannedToken {
+                    token: Token::Comma,
+                    span: Span::new(start_line, start_col, start_offset, offset),
+                });
+            }
+            ':' => {
+                chars.next();
+                bump(ch, &mut line, &mut col, &mut offset);
+                tokens.push(SpannedToken {
+                    token: Token::Colon,
+                    span: Span::new(start_line, start_col, start_offset, offset),
+                });
+            }
+            '@' => {
+                chars.next();
+                bump(ch, &mut line, &mut col, &mut offset);
+                tokens.push(SpannedToken {
+                    token: Token::At,
+                    span: Span::new(start_line, start_col, start_offset, offset),
+                });
+            }
+            '$' => {
+                chars.next();
+                bump(ch, &mut line, &mut col, &mut offset);
+                tokens.push(SpannedToken {
+                    token: Token::Dollar,
+                    span: Span::new(start_line, start_col, start_offset, offset),
+                });
+            }
+            
+            // Identifiers and keywords
             _ if ch.is_alphabetic() || ch == '_' => {
                 let mut ident = String::new();
                 while let Some(&ch) = chars.peek() {
-                    if ch.is_alphanumeric() || ch == '_' || ch == '-' {
+                    if ch.is_alphanumeric() || ch == '_' {
                         ident.push(ch);
                         chars.next();
                         bump(ch, &mut line, &mut col, &mut offset);
@@ -424,77 +519,52 @@ pub fn tokenize_with_spans(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                         break;
                     }
                 }
-
+                
                 let token = match ident.as_str() {
                     "run" => Token::Run,
                     "block" => Token::Block,
-                    "group" => Token::Group,
-                    "severity" => Token::Severity,
-                    "enabled" => Token::Enabled,
-                    "require" => Token::Require,
+                    "warn" => Token::Warn,
                     "allow" => Token::Allow,
-                    "file" => Token::File,
-                    "env" => Token::Env,
                     "parallel" => Token::Parallel,
                     "let" => Token::Let,
-                    "staged_files" => Token::StagedFiles,
-                    "all_files" => Token::AllFiles,
-                    "branch_name" => Token::BranchName,
-                    "commit_message" => Token::CommitMessage,
-                    "author_email" => Token::AuthorEmail,
-                    "author_set" => Token::AuthorSet,
-                    "author_email_set" => Token::AuthorEmailSet,
-                    "author_missing" => Token::AuthorMissing,
-                    "modified_lines" => Token::ModifiedLines,
-                    "files_changed" => Token::FilesChanged,
-                    "additions" => Token::Additions,
-                    "deletions" => Token::Deletions,
-                    "commits_ahead" => Token::CommitsAhead,
-                    "file_exists" => Token::FileExists,
-                    "file_size" => Token::FileSize,
-                    "content" => Token::Content,
-                    "staged_content" => Token::StagedContent,
-                    "diff" => Token::Diff,
-                    "be_staged" => Token::BeStaged,
                     "foreach" => Token::Foreach,
-                    "true" => Token::True,
-                    "false" => Token::False,
-                    "where" => Token::Where,
-                    "matches" => Token::Matches,
-                    "matching" => Token::Matching,
-                    "must" => Token::Must,
+                    "if" => Token::If,
+                    "else" => Token::Else,
                     "match" => Token::Match,
-                    "contain" => Token::Contain,
-                    "contains" => Token::Contains,
-                    "block_if" => Token::BlockIf,
-                    "warn_if" => Token::WarnIf,
-                    "contains_secrets" => Token::ContainsSecrets,
-                    "message" => Token::Message,
-                    "with" => Token::With,
-                    "interactive" => Token::Interactive,
-                    "ask" => Token::Ask,
+                    "where" => Token::Where,
+                    "try" => Token::Try,
+                    "catch" => Token::Catch,
+                    "break" => Token::Break,
+                    "continue" => Token::Continue,
+                    "macro" => Token::Macro,
+                    "import" => Token::Import,
+                    "use" => Token::Use,
+                    "group" => Token::Group,
+                    "in" => Token::In,
                     "not" => Token::Not,
                     "and" => Token::And,
                     "or" => Token::Or,
-                    "in" => Token::In,
-                    "when" => Token::When,
-                    "else" => Token::Else,
-                    "use" => Token::Use,
-                    "import" => Token::Import,
-                    "macro" => Token::Macro,
+                    "true" => Token::True,
+                    "false" => Token::False,
+                    "null" => Token::Null,
                     _ => Token::Identifier(ident),
                 };
-                tokens.push(SpannedToken { 
-                    token, 
-                    span: Span::new(start_line, start_col, start_offset, offset) 
+                
+                tokens.push(SpannedToken {
+                    token,
+                    span: Span::new(start_line, start_col, start_offset, offset),
                 });
             }
+            
             _ => {
-                chars.next();
-                bump(ch, &mut line, &mut col, &mut offset);
+                return Err(LexError::UnexpectedChar {
+                    ch,
+                    span: Span::new(start_line, start_col, start_offset, offset),
+                    suggestion: None,
+                });
             }
         }
     }
-
+    
     Ok(tokens)
 }

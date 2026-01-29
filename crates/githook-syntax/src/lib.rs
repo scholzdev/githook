@@ -1,11 +1,11 @@
-mod lexer;
-mod parser;
-mod ast;
+// Redesigned GitHook Language System
+pub mod lexer;
+pub mod ast;
+pub mod parser;
 pub mod error;
-pub mod cache;
 
-pub use lexer::{Token, SpannedToken, tokenize_with_spans};
-pub use parser::parse_spanned;
+// Re-exports for convenience
+pub use lexer::{Token, SpannedToken, tokenize};
+pub use parser::parse;
 pub use ast::*;
 pub use error::{Span, LexError, ParseError, Diagnostic};
-pub use cache::{ParseCache, CacheStats};

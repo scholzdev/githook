@@ -3,10 +3,11 @@ mod updater;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use colored::*;
-use githook::prelude::*;
-use githook::{parse_spanned, tokenize_with_spans, Diagnostic};
+use githook_eval::{Executor, ExecutionResult};
+use githook_syntax::{lexer, parser};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 #[derive(Parser)]
 #[command(name = "githook")]
@@ -53,48 +54,38 @@ fn main() -> Result<()> {
         };
     }
 
-    let only_groups = cli.only_groups.map(|s| {
-        s.split(',').map(|g| g.trim().to_string()).collect()
-    });
-    
-    let skip_groups = cli.skip_groups.map(|s| {
-        s.split(',').map(|g| g.trim().to_string()).collect()
-    });
-
-    let use_cache = !cli.no_cache && (cli.cache || !cli.no_cache);
-
     let hook_type = determine_hook_type(cli.hook_type, &cli.hook_args)?;
-
     let config_path = find_config(&hook_type)?;
 
-    if !use_cache {
-        println!(
-            "{} Running {} (cache disabled)...",
-            "-".cyan(),
-            config_path.display()
-        );
-    } else {
-        println!("{} Running {}...", "-".cyan(), config_path.display());
-    }
+    println!("{} Running {}...", "-".cyan(), config_path.display());
 
     let source = fs::read_to_string(&config_path)
         .with_context(|| format!("Failed to read config from {:?}", config_path))?;
 
-    let tokens = match tokenize_with_spans(&source) {
+    // ========================================================================
+    // V2 SYSTEM: Lexer → Parser → Executor
+    // ========================================================================
+    
+    // 1. Tokenize
+    let tokens = match lexer::tokenize(&source) {
         Ok(tokens) => tokens,
         Err(lex_error) => {
-            let diagnostic = Diagnostic::new_lex(&source, lex_error);
-            eprintln!("{}", diagnostic);
+            let span = lex_error.span();
+            eprintln!("{} Lexer error: {}", "x".red(), lex_error);
+            eprintln!("\n{}", githook_syntax::error::format_error_with_source(
+                &format!("{}", lex_error),
+                &source,
+                span
+            ));
             std::process::exit(1);
         }
     };
 
-    // Parse with span information
-    let ast = match parse_spanned(tokens) {
-        Ok(ast) => ast.to_vec(),
+    // 2. Parse
+    let statements = match parser::parse(tokens) {
+        Ok(stmts) => stmts,
         Err(parse_error) => {
-            let diagnostic = Diagnostic::new_parse(&source, parse_error);
-            eprintln!("{}", diagnostic);
+            eprintln!("{} Parser error: {}", "x".red(), parse_error);
             eprintln!(
                 "\n{}: Make sure all blocks are properly closed with '{{' and '}}'\n",
                 "Tip".yellow().bold()
@@ -103,22 +94,58 @@ fn main() -> Result<()> {
         }
     };
 
-    validate_config(&ast, &config_path)?;
+    // 3. Get git files
+    let git_files = get_git_files(&hook_type)?;
+    
+    // 4. Execute with V2 executor
+    let mut executor = Executor::new()
+        .with_git_files(git_files);
+    executor.verbose = false; // Clean output
 
-    let status = execute_with_filters(ast, &cli.hook_args, only_groups, skip_groups)
+    let result = executor.execute_statements(&statements)
         .with_context(|| "Failed to execute hook")?;
 
-    match status {
-        ExecutionStatus::Ok => {
-            println!("{} Hook passed!", "✓".green());
+    // Print summary
+    println!();
+    println!("{}", "=== Summary ===".cyan().bold());
+    
+    if executor.tests_run == 0 && executor.blocks.is_empty() && executor.warnings.is_empty() {
+        println!("{}", "No checks performed (empty repository or no staged files)".dimmed());
+    }
+    
+    if !executor.warnings.is_empty() {
+        println!("{}", "Warnings:".yellow());
+        for warning in &executor.warnings {
+            println!("  ! {}", warning);
+        }
+        println!();
+    }
+    
+    if !executor.blocks.is_empty() {
+        println!("{}", "Blocked:".red());
+        for block in &executor.blocks {
+            println!("  x {}", block);
+        }
+        println!();
+    }
+    
+    match result {
+        ExecutionResult::Continue => {
+            if executor.tests_run > 0 {
+                println!("{} Passed {} checks", "o".green(), executor.tests_run);
+            } else {
+                println!("{} No checks to run", "o".green());
+            }
             std::process::exit(0);
         }
-        ExecutionStatus::Warn => {
-            println!("{} Hook passed with warnings", "!".yellow());
-            std::process::exit(0);
+        ExecutionResult::Blocked => {
+            println!("{} Hook blocked", "x".red());
+            std::process::exit(1);
         }
-        ExecutionStatus::Block => {
-            println!("{} Hook blocked!", "✗".red());
+        ExecutionResult::Break | ExecutionResult::ContinueLoop => {
+            // These should only occur inside loops and should be handled there
+            // If we reach here, it means break/continue was used outside a loop
+            println!("{} Error: break/continue used outside loop", "x".red());
             std::process::exit(1);
         }
     }
@@ -289,27 +316,49 @@ fn list_packages() -> Result<()> {
     Ok(())
 }
 
-fn validate_config(ast: &[Statement], _config_path: &Path) -> Result<()> {
-    let mut warnings = Vec::new();
-    
-    for (i, stmt) in ast.iter().enumerate() {
-        if let Statement::Group { definition, .. } = stmt {
-            if definition.name.is_empty() {
-                warnings.push(format!("Line {}: Group has empty name", i + 1));
-            }
-            if definition.name.contains(' ') {
-                warnings.push(format!("Line {}: Group name '{}' contains spaces (use hyphens instead)", i + 1, definition.name));
-            }
+fn get_git_files(hook_type: &str) -> Result<Vec<String>> {
+    // For pre-commit, get staged files
+    if hook_type == "pre-commit" {
+        let output = Command::new("git")
+            .args(["diff", "--cached", "--name-only", "--diff-filter=ACM"])
+            .output()
+            .context("Failed to get git staged files")?;
+        
+        if !output.status.success() {
+            return Ok(Vec::new());
         }
+        
+        let files = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(|s| s.to_string())
+            .collect();
+        
+        return Ok(files);
     }
     
-    if !warnings.is_empty() {
-        eprintln!("{}", "Configuration warnings:".yellow().bold());
-        for warning in warnings {
-            eprintln!("  {} {}", "!".yellow(), warning);
-        }
-        eprintln!();
+    // For other hooks, get all tracked files
+    let output = Command::new("git")
+        .args(["ls-files"])
+        .output()
+        .context("Failed to get git files")?;
+    
+    if !output.status.success() {
+        return Ok(Vec::new());
     }
     
+    let files = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(|s| s.to_string())
+        .collect();
+    
+    Ok(files)
+}
+
+#[allow(dead_code)]
+fn validate_config(_statements: &[githook_syntax::ast::Statement], _config_path: &Path) -> Result<()> {
+    // V2: Simplified validation - parser already handles most errors
+    // TODO: Add semantic validation for groups, etc.
     Ok(())
 }

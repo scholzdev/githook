@@ -12,3 +12,4 @@ regex.workspace = true
 lru.workspace = true
 once_cell.workspace = true
 rayon.workspace = true
+githook-macros = { path = "../githook-macros" }

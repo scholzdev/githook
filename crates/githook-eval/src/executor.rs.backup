@@ -1,0 +1,828 @@
+use anyhow::{Result, bail, Context as _};
+use std::collections::HashMap;
+use std::process::Command;
+
+use crate::value::{Value, Object};
+use githook_syntax::ast::{Statement, Expression, BinaryOp, UnaryOp, MatchPattern};
+
+// ============================================================================
+// EXECUTOR V2 - Expression evaluation and statement execution
+// ============================================================================
+
+#[derive(Clone)]
+pub struct Executor {
+    /// Global variables (let bindings)
+    pub variables: HashMap<String, Value>,
+    
+    /// Git context (injected)
+    git_files: Vec<String>,
+    
+    /// Execution mode
+    pub verbose: bool,
+    
+    /// Collected warnings
+    pub warnings: Vec<String>,
+    
+    /// Collected blocks
+    pub blocks: Vec<String>,
+    
+    /// Test counter
+    pub tests_run: usize,
+    
+    /// Macro definitions (name -> (params, body))
+    macros: HashMap<String, (Vec<String>, Vec<Statement>)>,
+}
+
+impl Executor {
+    pub fn new() -> Self {
+        Self {
+            variables: HashMap::new(),
+            git_files: Vec::new(),
+            verbose: false,
+            warnings: Vec::new(),
+            blocks: Vec::new(),
+            tests_run: 0,
+            macros: HashMap::new(),
+        }
+    }
+    
+    pub fn with_git_files(mut self, files: Vec<String>) -> Self {
+        self.git_files = files;
+        self
+    }
+    
+    pub fn set_variable(&mut self, name: String, value: Value) {
+        self.variables.insert(name, value);
+    }
+    
+    // ========================================================================
+    // EXPRESSION EVALUATION
+    // ========================================================================
+    
+    pub fn eval_expression(&self, expr: &Expression) -> Result<Value> {
+        match expr {
+            Expression::String(s, _) => Ok(Value::String(s.clone())),
+            Expression::Number(n, _) => Ok(Value::Number(*n)),
+            Expression::Bool(b, _) => Ok(Value::Bool(*b)),
+            Expression::Null(_) => Ok(Value::Null),
+            
+            Expression::Identifier(name, _) => {
+                // Built-in objects
+                match name.as_str() {
+                    "git" => Ok(self.create_git_object()),
+                    "env" => Ok(Value::env_object()),
+                    _ => {
+                        // User variables
+                        self.variables.get(name)
+                            .cloned()
+                            .ok_or_else(|| anyhow::anyhow!("Variable '{}' not found", name))
+                    }
+                }
+            }
+            
+            Expression::PropertyAccess { chain, span: _ } => {
+                self.eval_property_chain(chain)
+            }
+            
+            Expression::MethodCall { receiver, method, args, span: _ } => {
+                let obj_value = self.eval_expression(receiver)?;
+                
+                // Special handling for methods that accept closures
+                if matches!(method.as_str(), "filter" | "map" | "find" | "any" | "all") && args.len() == 1 {
+                    if let Expression::Closure { param, body, .. } = &args[0] {
+                        return self.eval_closure_method(&obj_value, method, param, body);
+                    }
+                }
+                
+                // Regular method call with evaluated arguments
+                let arg_values: Result<Vec<Value>> = args.iter()
+                    .map(|a| self.eval_expression(a))
+                    .collect();
+                obj_value.call_method(method, &arg_values?)
+            }
+            
+            Expression::Binary { left, op, right, span: _ } => {
+                let left_val = self.eval_expression(left)?;
+                let right_val = self.eval_expression(right)?;
+                self.eval_binary_op(&left_val, *op, &right_val)
+            }
+            
+            Expression::Unary { op, expr, span: _ } => {
+                let val = self.eval_expression(expr)?;
+                self.eval_unary_op(*op, &val)
+            }
+            
+            Expression::Array(elements, _) => {
+                let values: Result<Vec<Value>> = elements.iter()
+                    .map(|e| self.eval_expression(e))
+                    .collect();
+                Ok(Value::Array(values?))
+            }
+            
+            Expression::InterpolatedString { parts, span: _ } => {
+                let mut result = String::new();
+                for part in parts {
+                    match part {
+                        githook_syntax::ast::StringPart::Literal(s) => result.push_str(s),
+                        githook_syntax::ast::StringPart::Expression(expr) => {
+                            let val = self.eval_expression(expr)?;
+                            result.push_str(&val.display());
+                        }
+                    }
+                }
+                Ok(Value::String(result))
+            }
+            
+            Expression::Closure { .. } => {
+                bail!("Closures cannot be evaluated directly; they must be used as arguments to methods like filter() or map()")
+            }
+        }
+    }
+    
+    fn eval_property_chain(&self, chain: &[String]) -> Result<Value> {
+        if chain.is_empty() {
+            bail!("Empty property chain");
+        }
+        
+        // First element: resolve to value
+        let mut current = match chain[0].as_str() {
+            "git" => self.create_git_object(),
+            "env" => Value::env_object(),
+            _ => self.variables.get(&chain[0])
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("Variable '{}' not found", chain[0]))?,
+        };
+        
+        // Rest: property access
+        for prop in &chain[1..] {
+            current = current.get_property(prop)?;
+        }
+        
+        Ok(current)
+    }
+    
+    fn eval_binary_op(&self, left: &Value, op: BinaryOp, right: &Value) -> Result<Value> {
+        match op {
+            // Comparison
+            BinaryOp::Eq => Ok(Value::Bool(left.equals(right)?)),
+            BinaryOp::Ne => Ok(Value::Bool(left.not_equals(right)?)),
+            BinaryOp::Lt => Ok(Value::Bool(left.less_than(right)?)),
+            BinaryOp::Le => Ok(Value::Bool(left.less_or_equal(right)?)),
+            BinaryOp::Gt => Ok(Value::Bool(left.greater_than(right)?)),
+            BinaryOp::Ge => Ok(Value::Bool(left.greater_or_equal(right)?)),
+            
+            // Logical
+            BinaryOp::And => Ok(Value::Bool(left.is_truthy() && right.is_truthy())),
+            BinaryOp::Or => Ok(Value::Bool(left.is_truthy() || right.is_truthy())),
+            
+            // Arithmetic
+            BinaryOp::Add => {
+                match (left, right) {
+                    // String concatenation
+                    (Value::String(l), Value::String(r)) => Ok(Value::String(format!("{}{}", l, r))),
+                    (Value::String(l), r) => Ok(Value::String(format!("{}{}", l, r.display()))),
+                    (l, Value::String(r)) => Ok(Value::String(format!("{}{}", l.display(), r))),
+                    // Number addition
+                    (Value::Number(l), Value::Number(r)) => Ok(Value::Number(l + r)),
+                    _ => bail!("Cannot add {:?} and {:?}", left, right),
+                }
+            }
+            BinaryOp::Sub => {
+                match (left, right) {
+                    (Value::Number(l), Value::Number(r)) => Ok(Value::Number(l - r)),
+                    _ => bail!("Cannot subtract {:?} from {:?}", right, left),
+                }
+            }
+            BinaryOp::Mul => {
+                match (left, right) {
+                    (Value::Number(l), Value::Number(r)) => Ok(Value::Number(l * r)),
+                    _ => bail!("Cannot multiply {:?} and {:?}", left, right),
+                }
+            }
+            BinaryOp::Div => {
+                match (left, right) {
+                    (Value::Number(l), Value::Number(r)) => {
+                        if *r == 0.0 {
+                            bail!("Division by zero");
+                        }
+                        Ok(Value::Number(l / r))
+                    }
+                    _ => bail!("Cannot divide {:?} by {:?}", left, right),
+                }
+            }
+            BinaryOp::Mod => {
+                match (left, right) {
+                    (Value::Number(l), Value::Number(r)) => {
+                        if *r == 0.0 {
+                            bail!("Modulo by zero");
+                        }
+                        Ok(Value::Number(l % r))
+                    }
+                    _ => bail!("Cannot modulo {:?} by {:?}", left, right),
+                }
+            }
+        }
+    }
+    
+    fn eval_unary_op(&self, op: UnaryOp, operand: &Value) -> Result<Value> {
+        match op {
+            UnaryOp::Not => Ok(Value::Bool(!operand.is_truthy())),
+            UnaryOp::Minus => {
+                match operand {
+                    Value::Number(n) => Ok(Value::Number(-n)),
+                    _ => bail!("Cannot negate {:?}", operand),
+                }
+            }
+        }
+    }
+    
+    fn eval_let_value(&self, value: &githook_syntax::ast::LetValue) -> Result<Value> {
+        use githook_syntax::ast::LetValue;
+        match value {
+            LetValue::String(s) => Ok(Value::String(s.clone())),
+            LetValue::Number(n) => Ok(Value::Number(*n)),
+            LetValue::Array(arr) => {
+                let vals: Vec<Value> = arr.iter()
+                    .map(|s| Value::String(s.clone()))
+                    .collect();
+                Ok(Value::Array(vals))
+            }
+            LetValue::Expression(expr) => self.eval_expression(expr),
+        }
+    }
+    
+    fn eval_closure_method(&self, obj: &Value, method: &str, param: &str, body: &Expression) -> Result<Value> {
+        match obj {
+            Value::Array(arr) => {
+                match method {
+                    "filter" => {
+                        let mut result = Vec::new();
+                        for item in arr {
+                            let mut scoped_executor: Executor = (*self).clone();
+                            scoped_executor.set_variable(param.to_string(), item.clone());
+                            let predicate_result = scoped_executor.eval_expression(body)?;
+                            if predicate_result.is_truthy() {
+                                result.push(item.clone());
+                            }
+                        }
+                        Ok(Value::Array(result))
+                    }
+                    "map" => {
+                        let mut result = Vec::new();
+                        for item in arr {
+                            let mut scoped_executor: Executor = (*self).clone();
+                            scoped_executor.set_variable(param.to_string(), item.clone());
+                            let mapped_value = scoped_executor.eval_expression(body)?;
+                            result.push(mapped_value);
+                        }
+                        Ok(Value::Array(result))
+                    }
+                    "find" => {
+                        for item in arr {
+                            let mut scoped_executor: Executor = (*self).clone();
+                            scoped_executor.set_variable(param.to_string(), item.clone());
+                            let predicate_result = scoped_executor.eval_expression(body)?;
+                            if predicate_result.is_truthy() {
+                                return Ok(item.clone());
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "any" => {
+                        for item in arr {
+                            let mut scoped_executor: Executor = (*self).clone();
+                            scoped_executor.set_variable(param.to_string(), item.clone());
+                            let predicate_result = scoped_executor.eval_expression(body)?;
+                            if predicate_result.is_truthy() {
+                                return Ok(Value::Bool(true));
+                            }
+                        }
+                        Ok(Value::Bool(false))
+                    }
+                    "all" => {
+                        for item in arr {
+                            let mut scoped_executor: Executor = (*self).clone();
+                            scoped_executor.set_variable(param.to_string(), item.clone());
+                            let predicate_result = scoped_executor.eval_expression(body)?;
+                            if !predicate_result.is_truthy() {
+                                return Ok(Value::Bool(false));
+                            }
+                        }
+                        Ok(Value::Bool(true))
+                    }
+                    _ => bail!("Unknown closure method: {}", method),
+                }
+            }
+            _ => bail!("Cannot call closure method '{}' on non-array value", method),
+        }
+    }
+    
+    // ========================================================================
+    // STATEMENT EXECUTION
+    // ========================================================================
+    
+    pub fn execute_statements(&mut self, statements: &[Statement]) -> Result<ExecutionResult> {
+        for stmt in statements {
+            let result = self.execute_statement(stmt)?;
+            if result.should_stop() {
+                return Ok(result);
+            }
+        }
+        Ok(ExecutionResult::Continue)
+    }
+    
+    pub fn execute_statement(&mut self, stmt: &Statement) -> Result<ExecutionResult> {
+        match stmt {
+            Statement::Run { command, span: _ } => {
+                let interpolated = self.interpolate_string(command)?;
+                self.run_command(&interpolated)?;
+                self.tests_run += 1;
+                Ok(ExecutionResult::Continue)
+            }
+            
+            Statement::Block { message, span: _ } => {
+                // Block means "stop and show message" - like a hard block
+                self.blocks.push(message.clone());
+                Ok(ExecutionResult::Blocked)
+            }
+            
+            Statement::Warn { message, span: _ } => {
+                self.warnings.push(message.clone());
+                Ok(ExecutionResult::Continue)
+            }
+            
+            Statement::Allow { command, span: _ } => {
+                if self.verbose {
+                    println!("o Explicitly allowed: {}", command);
+                }
+                Ok(ExecutionResult::Continue)
+            }
+            
+            Statement::Parallel { commands, span: _ } => {
+                // TODO: Implement parallel execution
+                // For now, sequential
+                for cmd in commands {
+                    self.run_command(cmd)?;
+                }
+                Ok(ExecutionResult::Continue)
+            }
+            
+            Statement::Let { name, value, span: _ } => {
+                let val = self.eval_let_value(value)?;
+                self.variables.insert(name.clone(), val);
+                Ok(ExecutionResult::Continue)
+            }
+            
+            Statement::ForEach { collection, var, where_clause: _, body, span: _ } => {
+                let coll_value = self.eval_expression(collection)?;
+                self.execute_foreach(&coll_value, var, body)
+            }
+            
+            Statement::If { condition, then_body, else_body, span: _ } => {
+                let cond = self.eval_expression(condition)?;
+                if cond.is_truthy() {
+                    self.execute_statements(then_body)
+                } else if let Some(else_stmts) = else_body {
+                    self.execute_statements(else_stmts)
+                } else {
+                    Ok(ExecutionResult::Continue)
+                }
+            }
+            
+            Statement::BlockIf { condition, message, interactive, span: _ } => {
+                let cond = self.eval_expression(condition)?;
+                if cond.is_truthy() {
+                    let msg = if let Some(m) = message {
+                        self.interpolate_string(m)?
+                    } else {
+                        "Condition failed".to_string()
+                    };
+                    self.blocks.push(msg);
+                    self.tests_run += 1;
+                    if interactive.is_some() {
+                        // TODO: Interactive prompts
+                    }
+                    return Ok(ExecutionResult::Blocked);
+                }
+                Ok(ExecutionResult::Continue)
+            }
+            
+            Statement::WarnIf { condition, message, interactive, span: _ } => {
+                let cond = self.eval_expression(condition)?;
+                if cond.is_truthy() {
+                    let msg = if let Some(m) = message {
+                        self.interpolate_string(m)?
+                    } else {
+                        "Warning".to_string()
+                    };
+                    self.warnings.push(msg);
+                    self.tests_run += 1;
+                    if interactive.is_some() {
+                        // TODO: Interactive prompts
+                    }
+                }
+                Ok(ExecutionResult::Continue)
+            }
+            
+            Statement::Match { subject, arms, span: _ } => {
+                let subj_value = self.eval_expression(subject)?;
+                let arm_tuples: Vec<_> = arms.iter()
+                    .map(|arm| (arm.pattern.clone(), arm.body.clone()))
+                    .collect();
+                self.execute_match(&subj_value, &arm_tuples)
+            }
+            
+            Statement::MacroDef { name, params, body, span: _ } => {
+                // Store macro definition
+                self.macros.insert(name.clone(), (params.clone(), body.clone()));
+                Ok(ExecutionResult::Continue)
+            }
+            
+            Statement::MacroCall { namespace, name, args, span: _ } => {
+                // Lookup macro
+                if namespace.is_some() {
+                    bail!("Namespaced macros not yet supported: {:?}::{}", namespace, name);
+                }
+                
+                let (params, body) = self.macros.get(name)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("Macro '{}' not defined", name))?;
+                
+                // Check parameter count
+                if params.len() != args.len() {
+                    bail!("Macro '{}' expects {} parameters, got {}", name, params.len(), args.len());
+                }
+                
+                // Save current variables
+                let saved_vars = self.variables.clone();
+                
+                // Bind parameters
+                for (param, arg) in params.iter().zip(args.iter()) {
+                    let arg_value = self.eval_expression(arg)?;
+                    self.variables.insert(param.clone(), arg_value);
+                }
+                
+                // Execute macro body
+                let result = self.execute_statements(&body);
+                
+                // Restore variables (but keep any new bindings from macro)
+                for (key, value) in saved_vars {
+                    if !self.variables.contains_key(&key) {
+                        self.variables.insert(key, value);
+                    }
+                }
+                
+                result
+            }
+            
+            Statement::Import { path, alias, span: _ } => {
+                // Import local .ghook file
+                let file_path = std::path::Path::new(path);
+                
+                // Resolve relative to current file or workspace
+                let import_path = if file_path.is_absolute() {
+                    file_path.to_path_buf()
+                } else {
+                    // Assume relative to .githook directory for now
+                    std::path::PathBuf::from(".githook").join(path)
+                };
+                
+                if !import_path.exists() {
+                    bail!("Import file not found: {}", path);
+                }
+                
+                // Read and parse imported file
+                let source = std::fs::read_to_string(&import_path)
+                    .with_context(|| format!("Failed to read import file: {}", path))?;
+                
+                let tokens = githook_syntax::lexer::tokenize(&source)
+                    .with_context(|| format!("Failed to tokenize import file: {}", path))?;
+                
+                let statements = githook_syntax::parser::parse(tokens)
+                    .with_context(|| format!("Failed to parse import file: {}", path))?;
+                
+                // Execute imported statements
+                if let Some(alias_name) = alias {
+                    // TODO: Support namespaced imports with alias
+                    // For now just execute directly
+                    if self.verbose {
+                        println!("Importing '{}' as '{}'", path, alias_name);
+                    }
+                }
+                
+                self.execute_statements(&statements)
+            }
+            
+            Statement::Use { package, alias, span: _ } => {
+                // Use external package: use "@namespace/name"
+                if !package.starts_with('@') {
+                    bail!("Package must start with '@', e.g. '@preview/quality'");
+                }
+                
+                let package_path = &package[1..]; // Remove @
+                let parts: Vec<&str> = package_path.split('/').collect();
+                
+                if parts.len() != 2 {
+                    bail!("Invalid package format. Expected '@namespace/name', got '{}'", package);
+                }
+                
+                let namespace = parts[0];
+                let name = parts[1];
+                
+                // Load package (auto-fetches if not cached)
+                let source = crate::package_resolver::load_package(namespace, name)
+                    .with_context(|| format!("Failed to load package: {}", package))?;
+                
+                let tokens = githook_syntax::lexer::tokenize(&source)
+                    .with_context(|| format!("Failed to tokenize package: {}", package))?;
+                
+                let statements = githook_syntax::parser::parse(tokens)
+                    .with_context(|| format!("Failed to parse package: {}", package))?;
+                
+                // Execute package statements
+                if let Some(alias_name) = alias {
+                    if self.verbose {
+                        println!("Using package '{}' as '{}'", package, alias_name);
+                    }
+                }
+                
+                self.execute_statements(&statements)
+            }
+            
+            Statement::Group { name, severity, enabled, body, span: _ } => {
+                if !enabled {
+                    if self.verbose {
+                        println!("⏭️  Group '{}' is disabled, skipping", name);
+                    }
+                    return Ok(ExecutionResult::Continue);
+                }
+                
+                if self.verbose {
+                    let sev = severity.as_ref()
+                        .map(|s| format!(" [{:?}]", s))
+                        .unwrap_or_default();
+                    println!("--- Group: {}{} ---", name, sev);
+                }
+                let result = self.execute_statements(body)?;
+                if self.verbose {
+                    println!("--- End: {} ---", name);
+                }
+                Ok(result)
+            }
+            
+            Statement::Try { body, catch_var, catch_body, span: _ } => {
+                // Execute try body
+                let result = self.execute_statements(body);
+                
+                match result {
+                    Ok(exec_result) => Ok(exec_result),
+                    Err(e) => {
+                        // Error occurred, execute catch body
+                        if let Some(var_name) = catch_var {
+                            // Bind error message to variable
+                            self.variables.insert(var_name.clone(), Value::String(e.to_string()));
+                        }
+                        
+                        // Execute catch body
+                        self.execute_statements(catch_body)
+                    }
+                }
+            }
+        }
+    }
+    
+    fn execute_foreach(&mut self, collection: &Value, var_name: &str, body: &[Statement]) -> Result<ExecutionResult> {
+        let items = match collection {
+            Value::Array(arr) => arr.clone(),
+            Value::Object(obj) if obj.type_name == "Git" => {
+                // git.all_files
+                if let Some(Value::Array(files)) = obj.get("all_files") {
+                    files.clone()
+                } else {
+                    Vec::new()
+                }
+            }
+            _ => bail!("Cannot iterate over {:?}", collection),
+        };
+        
+        // Track if collection was empty
+        if items.is_empty() {
+            self.tests_run += 1; // Count foreach as 1 check even if empty
+        }
+        
+        for item in items {
+            // Set loop variable
+            let old_value = self.variables.insert(var_name.to_string(), item);
+            
+            // Execute body - this will increment tests_run for each check
+            let result = self.execute_statements(body)?;
+            
+            // Restore old value
+            if let Some(old) = old_value {
+                self.variables.insert(var_name.to_string(), old);
+            } else {
+                self.variables.remove(var_name);
+            }
+            
+            if result.should_stop() {
+                return Ok(result);
+            }
+        }
+        
+        Ok(ExecutionResult::Continue)
+    }
+    
+    fn execute_match(&mut self, subject: &Value, arms: &[(MatchPattern, Vec<Statement>)]) -> Result<ExecutionResult> {
+        for (pattern, body) in arms {
+            if self.pattern_matches(pattern, subject)? {
+                return self.execute_statements(body);
+            }
+        }
+        
+        // No match found
+        Ok(ExecutionResult::Continue)
+    }
+    
+    fn pattern_matches(&self, pattern: &MatchPattern, value: &Value) -> Result<bool> {
+        match pattern {
+            MatchPattern::Expression(expr, _) => {
+                let pattern_val = self.eval_expression(expr)?;
+                value.equals(&pattern_val)
+            }
+            
+            MatchPattern::Wildcard(s, _) => {
+                // Simple glob matching
+                let value_str = value.as_string()?;
+                let pattern_str = s.as_str();
+                
+                if pattern_str.contains('*') {
+                    // Convert glob to regex
+                    let regex_pattern = pattern_str
+                        .replace(".", "\\.")
+                        .replace("*", ".*");
+                    let regex = regex::Regex::new(&format!("^{}$", regex_pattern))?;
+                    Ok(regex.is_match(&value_str))
+                } else {
+                    Ok(value_str == pattern_str)
+                }
+            }
+            
+            MatchPattern::Underscore(_) => Ok(true),
+        }
+    }
+    
+    // ========================================================================
+    // HELPERS
+    // ========================================================================
+    
+    fn interpolate_string(&self, s: &str) -> Result<String> {
+        let mut result = String::new();
+        let mut chars = s.chars().peekable();
+        
+        while let Some(ch) = chars.next() {
+            if ch == '$' && chars.peek() == Some(&'{') {
+                chars.next(); // consume '{'
+                
+                // Extract expression until '}'
+                let mut expr_str = String::new();
+                let mut depth = 1;
+                while let Some(ch) = chars.next() {
+                    if ch == '{' {
+                        depth += 1;
+                        expr_str.push(ch);
+                    } else if ch == '}' {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                        expr_str.push(ch);
+                    } else {
+                        expr_str.push(ch);
+                    }
+                }
+                
+                // Simple property chain parsing
+                let parts: Vec<String> = expr_str.split('.').map(|s| s.trim().to_string()).collect();
+                if !parts.is_empty() {
+                    let value = self.eval_property_chain(&parts)?;
+                    result.push_str(&value.display());
+                }
+            } else {
+                result.push(ch);
+            }
+        }
+        
+        Ok(result)
+    }
+    
+    fn run_command(&self, cmd: &str) -> Result<()> {
+        if self.verbose {
+            println!("> Running: {}", cmd);
+        }
+        
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg(cmd)
+            .output()
+            .context(format!("Failed to execute command: {}", cmd))?;
+        
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("Command failed: {}\n{}", cmd, stderr);
+        }
+        
+        // Always print stdout from commands
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if !stdout.is_empty() {
+            print!("{}", stdout);
+        }
+        
+        Ok(())
+    }
+    
+    fn create_git_object(&self) -> Value {
+        let mut git = Object::new("Git");
+        
+        // Get git context from githook-git crate
+        let git_context = githook_git::GitContext::new();
+        
+        // all_files array
+        let all_files: Vec<Value> = git_context.all_files.iter()
+            .map(|path| Value::file_object(path.clone()))
+            .collect();
+        git.set("all_files", Value::Array(all_files));
+        
+        // staged_files array
+        let staged_files: Vec<Value> = git_context.staged_files.iter()
+            .map(|path| Value::file_object(path.clone()))
+            .collect();
+        git.set("staged_files", Value::Array(staged_files));
+        
+        // branch object
+        let mut branch = Object::new("Branch");
+        branch.set("name", Value::String(git_context.branch.name));
+        git.set("branch", Value::Object(branch));
+        
+        // commit object (null if no commit exists)
+        let commit_value = if let Some(commit_info) = git_context.commit {
+            let mut commit = Object::new("Commit");
+            commit.set("message", Value::String(commit_info.message));
+            commit.set("hash", Value::String(commit_info.hash));
+            Value::Object(commit)
+        } else {
+            Value::Null
+        };
+        git.set("commit", commit_value);
+        
+        // author object
+        let mut author = Object::new("Author");
+        author.set("name", Value::String(git_context.author.name));
+        author.set("email", Value::String(git_context.author.email));
+        git.set("author", Value::Object(author));
+        
+        // remote object
+        let mut remote = Object::new("Remote");
+        remote.set("name", Value::String(git_context.remote.name));
+        remote.set("url", Value::String(git_context.remote.url));
+        git.set("remote", Value::Object(remote));
+        
+        // stats object
+        let mut stats = Object::new("Stats");
+        stats.set("files_changed", Value::Number(git_context.stats.files_changed as f64));
+        stats.set("additions", Value::Number(git_context.stats.additions as f64));
+        stats.set("deletions", Value::Number(git_context.stats.deletions as f64));
+        stats.set("modified_lines", Value::Number((git_context.stats.additions + git_context.stats.deletions) as f64));
+        git.set("stats", Value::Object(stats));
+        
+        // boolean flags
+        git.set("is_merge_commit", Value::Bool(git_context.is_merge_commit));
+        git.set("has_conflicts", Value::Bool(git_context.has_conflicts));
+        
+        Value::Object(git)
+    }
+}
+
+impl Default for Executor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ============================================================================
+// EXECUTION RESULT
+// ============================================================================
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExecutionResult {
+    /// Continue execution
+    Continue,
+    
+    /// Block execution (block if triggered)
+    Blocked,
+}
+
+impl ExecutionResult {
+    pub fn should_stop(&self) -> bool {
+        matches!(self, ExecutionResult::Blocked)
+    }
+}

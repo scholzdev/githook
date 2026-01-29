@@ -42,10 +42,10 @@ pub fn get_definition(doc: &DocumentState, position: Position, current_uri: &str
             let macro_name = &macro_ref[colon_pos + 1..];
             
             info!("Looking for namespaced macro: {}:{}", namespace, macro_name);
-            info!("Available imports: {:?}", doc.imports);
+            // TODO: Extract imports from AST
             
             // Find the import with this alias
-            for (alias, import_path) in &doc.imports {
+            for (alias, import_path) in &[] as &[(String, String)] {
                 if alias == namespace {
                     info!("Found import: {} -> {}", alias, import_path);
                     
@@ -101,7 +101,8 @@ pub fn get_definition(doc: &DocumentState, position: Position, current_uri: &str
         }
         
         // Find the definition in current file
-        for (name, span, _body) in &doc.macro_definitions {
+        // TODO: Extract macro definitions from AST
+        for (name, span, _body) in &[] as &[(String, githook_syntax::Span, Vec<githook_syntax::ast::Statement>)] {
             if name == macro_ref {
                 // Convert span to LSP Location
                 let start = Position {

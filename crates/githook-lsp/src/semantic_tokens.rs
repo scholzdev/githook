@@ -147,7 +147,7 @@ fn collect_comments_raw(text: &str, tokens: &mut Vec<RawToken>) {
 
 fn collect_tokens_raw(stmt: &Statement, tokens: &mut Vec<RawToken>) {
     match stmt {
-        Statement::MacroDefinition { name, span, body, .. } => {
+        Statement::MacroDef { name, span, body, .. } => {
             // "macro" keyword (type 0)
             tokens.push(RawToken {
                 line: (span.line - 1) as u32,
@@ -199,7 +199,7 @@ fn collect_tokens_raw(stmt: &Statement, tokens: &mut Vec<RawToken>) {
                 });
             }
         }
-        Statement::Run(_, span) => {
+        Statement::Run { span, .. } => {
             // "run" keyword
             tokens.push(RawToken {
                 line: (span.line - 1) as u32,
@@ -209,14 +209,19 @@ fn collect_tokens_raw(stmt: &Statement, tokens: &mut Vec<RawToken>) {
                 modifiers: 0,
             });
         }
-        Statement::When { body, else_body, .. } => {
-            for inner_stmt in body {
+        Statement::If { then_body, else_body, .. } => {
+            for inner_stmt in then_body {
                 collect_tokens_raw(inner_stmt, tokens);
             }
             if let Some(else_stmts) = else_body {
                 for inner_stmt in else_stmts {
                     collect_tokens_raw(inner_stmt, tokens);
                 }
+            }
+        }
+        Statement::ForEach { body, .. } => {
+            for inner_stmt in body {
+                collect_tokens_raw(inner_stmt, tokens);
             }
         }
         _ => {}

@@ -12,6 +12,9 @@ path = "src/main.rs"
 
 [dependencies]
 githook.workspace = true
+githook-syntax = { path = "../githook-syntax" }
+githook-eval = { path = "../githook-eval" }
+githook-git = { path = "../githook-git" }
 anyhow.workspace = true
 clap.workspace = true
 colored.workspace = true

@@ -1,0 +1,83 @@
+{
+  "name": "githook",
+  "displayName": "Githook",
+  "description": "Language support for Githook (.ghook files)",
+  "version": "0.3.6",
+  "publisher": "florianscholz",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-username/githook"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:githook"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "githook",
+        "aliases": [
+          "Githook",
+          "githook"
+        ],
+        "extensions": [
+          ".ghook"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "githook",
+        "scopeName": "source.githook",
+        "path": "./syntaxes/githook.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Githook",
+      "properties": {
+        "githook.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Traces the communication between VS Code and the Githook language server."
+        },
+        "githook.lsp.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the githook-lsp binary. If empty, will search in PATH."
+        },
+        "[githook]": {
+          "editor.quickSuggestions": {
+            "strings": true
+          }
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "@types/vscode": "^1.75.0",
+    "@vscode/vsce": "^2.22.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

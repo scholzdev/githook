@@ -16,7 +16,7 @@ pub fn get_folding_ranges(ast: &Option<Vec<Statement>>) -> Vec<FoldingRange> {
 
 fn collect_folding_ranges(stmt: &Statement, ranges: &mut Vec<FoldingRange>) {
     match stmt {
-        Statement::MacroDefinition { span, body, .. } => {
+        Statement::MacroDef { span, body, .. } => {
             if !body.is_empty() {
                 // Find the end line by getting the max span from body
                 let end_line = body.iter()
@@ -40,9 +40,9 @@ fn collect_folding_ranges(stmt: &Statement, ranges: &mut Vec<FoldingRange>) {
                 collect_folding_ranges(inner_stmt, ranges);
             }
         }
-        Statement::When { span, body, else_body, .. } => {
-            if !body.is_empty() {
-                let end_line = body.iter()
+        Statement::If { span, then_body, else_body, .. } => {
+            if !then_body.is_empty() {
+                let end_line = then_body.iter()
                     .filter_map(|s| get_statement_span(s))
                     .map(|s| s.line)
                     .max()
@@ -58,7 +58,7 @@ fn collect_folding_ranges(stmt: &Statement, ranges: &mut Vec<FoldingRange>) {
                 });
             }
             
-            for inner_stmt in body {
+            for inner_stmt in then_body {
                 collect_folding_ranges(inner_stmt, ranges);
             }
             
@@ -68,9 +68,9 @@ fn collect_folding_ranges(stmt: &Statement, ranges: &mut Vec<FoldingRange>) {
                 }
             }
         }
-        Statement::Group { span, definition, .. } => {
-            if !definition.body.is_empty() {
-                let end_line = definition.body.iter()
+        Statement::ForEach { body, span, .. } => {
+            if !body.is_empty() {
+                let end_line = body.iter()
                     .filter_map(|s| get_statement_span(s))
                     .map(|s| s.line)
                     .max()
@@ -91,14 +91,16 @@ fn collect_folding_ranges(stmt: &Statement, ranges: &mut Vec<FoldingRange>) {
 }
 
 fn get_statement_span(stmt: &Statement) -> Option<githook_syntax::error::Span> {
+    use githook_syntax::ast::Statement::*;
     match stmt {
-        Statement::Run(_, span) => Some(*span),
-        Statement::Block(_, span) => Some(*span),
-        Statement::MacroDefinition { span, .. } => Some(*span),
-        Statement::MacroCall { span, .. } => Some(*span),
-        Statement::When { span, .. } => Some(*span),
-        Statement::Group { span, .. } => Some(*span),
-        Statement::Import { span, .. } => Some(*span),
+        Run { span, .. } => Some(*span),
+        Block { span, .. } => Some(*span),
+        Warn { span, .. } => Some(*span),
+        MacroDef { span, .. } => Some(*span),
+        MacroCall { span, .. } => Some(*span),
+        If { span, .. } => Some(*span),
+        ForEach { span, .. } => Some(*span),
+        Import { span, .. } => Some(*span),
         _ => None,
     }
 }

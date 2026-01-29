@@ -2,11 +2,12 @@ use tower_lsp::lsp_types::*;
 use crate::document::DocumentState;
 
 /// Get document symbols for outline view
-pub fn get_document_symbols(doc: &DocumentState) -> Vec<DocumentSymbol> {
+pub fn get_document_symbols(_doc: &DocumentState) -> Vec<DocumentSymbol> {
     let mut symbols = Vec::new();
     
+    // TODO: Extract macro definitions and imports from AST
     // Add macro definitions
-    for (name, span, _body) in &doc.macro_definitions {
+    for (name, span, _body) in &[] as &[(String, githook_syntax::Span, Vec<githook_syntax::ast::Statement>)] {
         #[allow(deprecated)]
         let symbol = DocumentSymbol {
             name: name.clone(),
@@ -40,7 +41,7 @@ pub fn get_document_symbols(doc: &DocumentState) -> Vec<DocumentSymbol> {
     }
     
     // Add imports
-    for (alias, path) in &doc.imports {
+    for (alias, path) in &[] as &[(String, String)] {
         let detail = format!("import \"{}\"", path);
         #[allow(deprecated)]
         let symbol = DocumentSymbol {

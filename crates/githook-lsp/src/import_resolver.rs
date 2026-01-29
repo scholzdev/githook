@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::fs;
-use githook_syntax::{tokenize_with_spans, parse_spanned, Statement};
+use githook_syntax::{lexer, parser, ast::Statement};
 use githook_syntax::error::Span;
 use tracing::info;
 
@@ -56,15 +56,15 @@ pub fn load_imported_macros(file_path: &Path) -> Result<Vec<(String, Span, Vec<S
     
     info!("File loaded, {} bytes", content.len());
     
-    let tokens = tokenize_with_spans(&content)
+    let tokens = lexer::tokenize(&content)
         .map_err(|e| format!("Tokenization failed: {:?}", e))?;
     
-    let ast = parse_spanned(tokens)
+    let ast = parser::parse(tokens)
         .map_err(|e| format!("Parsing failed: {:?}", e))?;
     
     let mut macros = Vec::new();
     for stmt in ast {
-        if let Statement::MacroDefinition { name, span, body, .. } = stmt {
+        if let Statement::MacroDef { name, span, body, .. } = stmt {
             info!("Found macro: {}", name);
             macros.push((name, span, body));
         }

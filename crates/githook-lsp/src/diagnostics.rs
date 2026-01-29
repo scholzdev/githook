@@ -1,36 +1,14 @@
 use tower_lsp::lsp_types::*;
 use tower_lsp::Client;
-use githook_syntax::{ParseError, Span};
+use githook_syntax::Span;
 
 /// Convert our ParseError to LSP Diagnostic
-pub fn parse_error_to_diagnostic(error: &ParseError, _source: &str) -> Diagnostic {
-    let (message, span) = match error {
-        ParseError::UnexpectedToken { expected, found, span } => {
-            (format!("Expected {}, found {}", expected, found), Some(*span))
-        }
-        ParseError::UnexpectedEof { expected, context } => {
-            let msg = if let Some(ctx) = context {
-                format!("Unexpected end of file while parsing {}, expected {}", ctx, expected)
-            } else {
-                format!("Unexpected end of file, expected {}", expected)
-            };
-            (msg, None)
-        }
-        ParseError::MissingToken { expected, span } => {
-            (format!("Missing {}", expected), Some(*span))
-        }
-        ParseError::InvalidSyntax { message, span } => {
-            (message.clone(), Some(*span))
-        }
-        ParseError::LexError(lex_error) => {
-            (format!("{}", lex_error), Some(lex_error.span()))
-        }
-    };
-
-    let range = span.map(span_to_range).unwrap_or_else(|| Range {
+pub fn parse_error_to_diagnostic(error: &str, _source: &str) -> Diagnostic {
+    // Simple error display - just show the error message
+    let range = Range {
         start: Position { line: 0, character: 0 },
         end: Position { line: 0, character: 0 },
-    });
+    };
 
     Diagnostic {
         range,
@@ -38,7 +16,7 @@ pub fn parse_error_to_diagnostic(error: &ParseError, _source: &str) -> Diagnosti
         code: None,
         code_description: None,
         source: Some("githook".to_string()),
-        message,
+        message: error.to_string(),
         related_information: None,
         tags: None,
         data: None,
@@ -46,6 +24,7 @@ pub fn parse_error_to_diagnostic(error: &ParseError, _source: &str) -> Diagnosti
 }
 
 /// Convert our Span to LSP Range
+#[allow(dead_code)]
 pub fn span_to_range(span: Span) -> Range {
     Range {
         start: Position {

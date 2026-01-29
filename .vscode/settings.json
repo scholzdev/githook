@@ -1,0 +1,4 @@
+{
+    "git.ignoreLimitWarning": true,
+    "rust-analyzer.diagnostics.disabled": ["macro-error"]
+}

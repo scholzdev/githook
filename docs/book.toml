@@ -1,0 +1,26 @@
+[book]
+title = "Githook Documentation"
+authors = ["Florian Scholz"]
+description = "A powerful DSL for Git hooks"
+language = "en"
+multilingual = false
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+default-theme = "ayu"
+preferred-dark-theme = "ayu"
+git-repository-url = "https://github.com/scholzdev/githook"
+edit-url-template = "https://github.com/scholzdev/githook/edit/main/docs/{path}"
+additional-js = ["theme/githook-highlight.js"]
+
+[output.html.playground]
+editable = true
+line-numbers = true
+
+[output.html.search]
+enable = true
+limit-results = 30
+use-boolean-and = true

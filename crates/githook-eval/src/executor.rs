@@ -1,1087 +1,865 @@
-use crate::context::ExecutionContext;
-use crate::conditions::evaluate_block_condition;
-use githook_syntax::{
-    Argument, ContentCheck, ContentScope, MessageCheck, RuleSeverity, Statement,
-    MatchSubject, MatchArm, MatchPattern
-};
-use anyhow::{Result, bail, Context as AnyhowContext};
-use colored::*;
-use regex::Regex;
+use anyhow::{Result, bail, Context as _};
+use std::collections::HashMap;
 use std::process::Command;
-use std::borrow::Cow;
-use std::sync::OnceLock;
 
-#[derive(Debug, PartialEq)]
-pub enum ExecutionStatus {
-    Ok,
-    Warn,
-    Block,
+use crate::value::{Value, Object};
+use githook_syntax::ast::{Statement, Expression, BinaryOp, UnaryOp, MatchPattern};
+
+// ============================================================================
+// EXECUTOR V2 - Expression evaluation and statement execution
+// ============================================================================
+
+#[derive(Clone)]
+pub struct Executor {
+    /// Global variables (let bindings)
+    pub variables: HashMap<String, Value>,
+    
+    /// Git context (injected)
+    git_files: Vec<String>,
+    
+    /// Execution mode
+    pub verbose: bool,
+    
+    /// Collected warnings
+    pub warnings: Vec<String>,
+    
+    /// Collected blocks
+    pub blocks: Vec<String>,
+    
+    /// Test counter
+    pub tests_run: usize,
+    
+    /// Macro definitions (name -> (params, body))
+    macros: HashMap<String, (Vec<String>, Vec<Statement>)>,
 }
 
-static GLOB_CACHE: OnceLock<std::sync::Mutex<lru::LruCache<String, glob::Pattern>>> = OnceLock::new();
-
-fn get_cached_glob(pattern: &str) -> Result<glob::Pattern> {
-    let cache = GLOB_CACHE.get_or_init(|| {
-        std::sync::Mutex::new(
-            lru::LruCache::new(
-                std::num::NonZeroUsize::new(128)
-                    .expect("128 is a valid non-zero cache size")
-            )
-        )
-    });
-
-    let mut cache = cache.lock()
-        .expect("Glob cache mutex should not be poisoned");
-    
-    if let Some(glob_pattern) = cache.get(pattern) {
-        return Ok(glob_pattern.clone());
+impl Executor {
+    pub fn new() -> Self {
+        Self {
+            variables: HashMap::new(),
+            git_files: Vec::new(),
+            verbose: false,
+            warnings: Vec::new(),
+            blocks: Vec::new(),
+            tests_run: 0,
+            macros: HashMap::new(),
+        }
     }
-
-    let glob_pattern = glob::Pattern::new(pattern)?;
-    cache.put(pattern.to_string(), glob_pattern.clone());
-    Ok(glob_pattern)
-}
-fn substitute_placeholders<'a>(input: &'a str, context: &ExecutionContext) -> Cow<'a, str> {
-    if !input.contains('{') {
-        return Cow::Borrowed(input);
-    }
-
-    let mut out = input.to_string();
-    let mut changed = false;
-
-    let re = regex::Regex::new(r"\{([a-z]+):([a-zA-Z0-9_]+)(\|[a-z0-9_:]+)*\}")
-        .expect("Valid regex pattern for placeholder matching");
     
-    for cap in re.captures_iter(input) {
-        let full_match = &cap[0];
-        let namespace = &cap[1];
-        let key = &cap[2];
-        let filters_str = cap.get(3).map(|m| m.as_str()).unwrap_or("");
-        
-        if let Some(mut value) = context.placeholder_registry().resolve(namespace, key, context) {
-            if !filters_str.is_empty() {
-                let filters: Vec<&str> = filters_str.split('|').filter(|s| !s.is_empty()).collect();
-                for filter in filters {
-                    value = apply_filter(&value, filter);
+    pub fn with_git_files(mut self, files: Vec<String>) -> Self {
+        self.git_files = files;
+        self
+    }
+    
+    pub fn set_variable(&mut self, name: String, value: Value) {
+        self.variables.insert(name, value);
+    }
+    
+    // ========================================================================
+    // EXPRESSION EVALUATION
+    // ========================================================================
+    
+    pub fn eval_expression(&self, expr: &Expression) -> Result<Value> {
+        match expr {
+            Expression::String(s, _) => Ok(Value::String(s.clone())),
+            Expression::Number(n, _) => Ok(Value::Number(*n)),
+            Expression::Bool(b, _) => Ok(Value::Bool(*b)),
+            Expression::Null(_) => Ok(Value::Null),
+            
+            Expression::Identifier(name, _) => {
+                // Built-in objects
+                match name.as_str() {
+                    "git" => Ok(self.create_git_object()),
+                    "env" => Ok(Value::env_object()),
+                    _ => {
+                        // User variables
+                        self.variables.get(name)
+                            .cloned()
+                            .ok_or_else(|| anyhow::anyhow!("Variable '{}' not found", name))
+                    }
                 }
             }
             
-            out = out.replace(full_match, &value);
-            changed = true;
-        }
-    }
-
-    for (k, v) in context.vars() {
-        let placeholder = format!("{{{}}}", k);
-        if out.contains(&placeholder) {
-            out = out.replace(&placeholder, v);
-            changed = true;
-        }
-    }
-
-    if changed {
-        Cow::Owned(out)
-    } else {
-        Cow::Borrowed(input)
-    }
-}
-
-fn apply_filter(value: &str, filter: &str) -> String {
-    if filter == "upper" {
-        value.to_uppercase()
-    } else if filter == "lower" {
-        value.to_lowercase()
-    } else if filter == "trim" {
-        value.trim().to_string()
-    } else if filter == "len" {
-        value.len().to_string()
-    } else if filter.starts_with("truncate:") {
-        let n: usize = filter.strip_prefix("truncate:").and_then(|s| s.parse().ok()).unwrap_or(10);
-        value.chars().take(n).collect()
-    } else if filter.starts_with("replace:") {
-        let parts: Vec<&str> = filter.strip_prefix("replace:").unwrap_or("").split(':').collect();
-        if parts.len() >= 2 {
-            value.replace(parts[0], parts[1])
-        } else {
-            value.to_string()
-        }
-    } else {
-        value.to_string()
-    }
-}
-
-fn parse_command(cmd: &str) -> Result<(String, Vec<String>)> {
-    let args = shell_words::split(cmd)
-        .map_err(|e| anyhow::anyhow!("Failed to parse command '{}': {}", cmd, e))?;
-    
-    if args.is_empty() {
-        return Ok((String::new(), vec![]));
-    }
-    
-    Ok((args[0].clone(), args[1..].to_vec()))
-}
-
-pub fn execute(statements: Vec<Statement>, hook_args: &[String]) -> Result<ExecutionStatus> {
-    execute_with_filters(statements, hook_args, None, None)
-}
-
-pub fn execute_with_filters(
-    statements: Vec<Statement>,
-    hook_args: &[String],
-    allowed_groups: Option<Vec<String>>,
-    skipped_groups: Option<Vec<String>>,
-) -> Result<ExecutionStatus> {
-    let mut context = ExecutionContext::new_with_filters(allowed_groups, skipped_groups);
-
-    for statement in &statements {
-        if !execute_statement(statement, &mut context, hook_args)? {
-            print_summary(&context);
-            return Ok(ExecutionStatus::Block);
-        }
-    }
-
-    print_summary(&context);
-
-    if context.has_warnings() {
-        Ok(ExecutionStatus::Warn)
-    } else {
-        Ok(ExecutionStatus::Ok)
-    }
-}
-
-fn print_summary(ctx: &ExecutionContext) {
-    println!("\n{}", "═".repeat(50));
-
-    let checks = ctx.checks_run();
-
-    if checks == 0 {
-        println!("o {} checks completed", checks);
-    } else {
-        println!("o {} check{} completed", checks, if checks == 1 { "" } else { "s" });
-    }
-
-    if !ctx.checks_passed().is_empty() {
-        println!("\no Passed checks:");
-        for check in ctx.checks_passed() {
-            println!("  - {}", check);
-        }
-    }
-
-    if ctx.has_warnings() {
-        println!("\n{} Warnings:", "!".yellow());
-        for (warning, locations) in ctx.warnings() {
-            println!("  - {}", warning.yellow());
-            for loc in locations {
-                println!("    in {}", loc.dimmed());
+            Expression::PropertyAccess { chain, span: _ } => {
+                self.eval_property_chain(chain)
+            }
+            
+            Expression::MethodCall { receiver, method, args, span: _ } => {
+                let obj_value = self.eval_expression(receiver)?;
+                
+                // Special handling for methods that accept closures
+                if matches!(method.as_str(), "filter" | "map" | "find" | "any" | "all") && args.len() == 1 {
+                    if let Expression::Closure { param, body, .. } = &args[0] {
+                        return self.eval_closure_method(&obj_value, method, param, body);
+                    }
+                }
+                
+                // Regular method call with evaluated arguments
+                let arg_values: Result<Vec<Value>> = args.iter()
+                    .map(|a| self.eval_expression(a))
+                    .collect();
+                obj_value.call_method(method, &arg_values?)
+            }
+            
+            Expression::Binary { left, op, right, span: _ } => {
+                let left_val = self.eval_expression(left)?;
+                let right_val = self.eval_expression(right)?;
+                self.eval_binary_op(&left_val, *op, &right_val)
+            }
+            
+            Expression::Unary { op, expr, span: _ } => {
+                let val = self.eval_expression(expr)?;
+                self.eval_unary_op(*op, &val)
+            }
+            
+            Expression::Array(elements, _) => {
+                let values: Result<Vec<Value>> = elements.iter()
+                    .map(|e| self.eval_expression(e))
+                    .collect();
+                Ok(Value::Array(values?))
+            }
+            
+            Expression::InterpolatedString { parts, span: _ } => {
+                let mut result = String::new();
+                for part in parts {
+                    match part {
+                        githook_syntax::ast::StringPart::Literal(s) => result.push_str(s),
+                        githook_syntax::ast::StringPart::Expression(expr) => {
+                            let val = self.eval_expression(expr)?;
+                            result.push_str(&val.display());
+                        }
+                    }
+                }
+                Ok(Value::String(result))
+            }
+            
+            Expression::Closure { .. } => {
+                bail!("Closures cannot be evaluated directly; they must be used as arguments to methods like filter() or map()")
             }
         }
     }
-
-    println!("{}", "═".repeat(50));
-}
-
-fn execute_run(cmd: &str, context: &mut ExecutionContext) -> Result<bool> {
-    let rendered_cmd = substitute_placeholders(cmd, context);
     
-    if !context.is_command_allowed(&rendered_cmd) {
-        println!("  {} Command '{}' is not in allow list", "x".red(), rendered_cmd.red());
-        return Ok(false);
-    }
-    context.check_run();
-
-    let (program, args) = match parse_command(&rendered_cmd) {
-        Ok(parsed) => parsed,
-        Err(e) => {
-            println!("  {} Failed to parse command: {}", "x".red(), e);
-            return Ok(false);
+    fn eval_property_chain(&self, chain: &[String]) -> Result<Value> {
+        if chain.is_empty() {
+            bail!("Empty property chain");
         }
-    };
-    
-    if program.is_empty() {
-        println!("  {} Empty command", "x".red());
-        return Ok(false);
-    }
-
-    let output = Command::new(&program)
-        .args(&args)
-        .output()?;
-
-    if !output.status.success() {
-        println!("  {} Command failed: {}", "x".red(), rendered_cmd.red());
-        if !output.stderr.is_empty() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            for line in stderr.lines() {
-                println!("    {}", line.dimmed());
-            }
-        }
-        return Ok(false);
-    }
-    context.check_passed(format!("Command: {}", rendered_cmd));
-    Ok(true)
-}
-
-fn execute_bool_literal(value: bool, context: &mut ExecutionContext) -> Result<bool> {
-    context.check_run();
-    if value {
-        context.check_passed("literal true".to_string());
-        Ok(true)
-    } else {
-        Ok(false)
-    }
-}
-
-fn execute_group(definition: &githook_syntax::GroupDefinition, context: &mut ExecutionContext, hook_args: &[String]) -> Result<bool> {
-    if let Some(allowed) = context.allowed_groups()
-        && !allowed.contains(&definition.name)
-    {
-        return Ok(true);
-    }
-    
-    if let Some(skipped) = context.skipped_groups()
-        && skipped.contains(&definition.name)
-    {
-        return Ok(true);
-    }
-    
-    let is_enabled = definition.enabled.unwrap_or(true);
-    
-    if !is_enabled {
-        return Ok(true);
-    }
-    
-    let severity_str = match &definition.severity {
-        Some(githook_syntax::GroupSeverity::Critical(_)) => "CRITICAL",
-        Some(githook_syntax::GroupSeverity::Warning(_)) => "WARNING",
-        Some(githook_syntax::GroupSeverity::Info(_)) => "INFO",
-        None => "GROUP",
-    };
-    
-    println!("\n{} [{}]", format!("- {}", definition.name).cyan().bold(), severity_str.yellow());
-    
-    let mut all_passed = true;
-    for stmt in &definition.body {
-        if !execute_statement(stmt, context, hook_args)? {
-            all_passed = false;
-        }
-    }
-    
-    if all_passed {
-        println!("{} Group '{}' passed", "o".green().bold(), definition.name.green());
-    } else {
-        println!("{} Group '{}' failed", "x".red().bold(), definition.name.red());
-    }
-    
-    Ok(all_passed)
-}
-
-fn execute_let_string_list(name: String, items: Vec<String>, context: &mut ExecutionContext) -> Result<bool> {
-    context.set_string_list(name, items);
-    Ok(true)
-}
-
-fn execute_block(msg: &str) -> Result<bool> {
-    println!("  {} {}", "x".red().bold(), msg.red());
-    Ok(false)
-}
-
-fn execute_foreach_string_list(
-    var: &str,
-    list: &str,
-    body: &[Statement],
-    context: &mut ExecutionContext,
-    hook_args: &[String]
-) -> Result<bool> {
-    let items = match context.get_string_list(list) {
-        Some(xs) => xs.to_vec(),
-        None => {
-            println!("  {} unknown string list '{}'", "x".red(), list.red());
-            return Ok(false);
-        }
-    };
-    
-    for item in items { 
-        context.set_var(var.to_string(), item); 
-        for stmt in body {
-            if !execute_statement(stmt, context, hook_args)? {
-                context.unset_var(var);
-                return Ok(false);
-            }
-        }
-    }
-    context.unset_var(var);
-    context.check_passed(format!("foreach {} in {}", var, list));
-    Ok(true)
-}
-
-fn execute_foreach_array(
-    var: &str,
-    items: &[githook_syntax::Argument],
-    body: &[Statement],
-    context: &mut ExecutionContext,
-    hook_args: &[String]
-) -> Result<bool> {
-    for item in items {
-        let value = match item {
-            githook_syntax::Argument::String(s, _) => s.clone(),
-            githook_syntax::Argument::Number(n, _) => n.to_string(),
-            githook_syntax::Argument::Identifier(id, _) => {
-                context.get_var(id).map(|s| s.to_string()).unwrap_or_else(|| id.clone())
-            },
-            githook_syntax::Argument::Array(_, _) => {
-                println!("  {} nested arrays not supported in foreach", "x".red());
-                return Ok(false);
-            }
+        
+        // First element: resolve to value
+        let mut current = match chain[0].as_str() {
+            "git" => self.create_git_object(),
+            "env" => Value::env_object(),
+            _ => self.variables.get(&chain[0])
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("Variable '{}' not found", chain[0]))?,
         };
         
-        context.set_var(var.to_string(), value);
+        // Rest: property access
+        for prop in &chain[1..] {
+            current = current.get_property(prop)?;
+        }
         
-        for stmt in body {
-            if !execute_statement(stmt, context, hook_args)? {
-                context.unset_var(var);
-                return Ok(false);
+        Ok(current)
+    }
+    
+    fn eval_binary_op(&self, left: &Value, op: BinaryOp, right: &Value) -> Result<Value> {
+        match op {
+            // Comparison
+            BinaryOp::Eq => Ok(Value::Bool(left.equals(right)?)),
+            BinaryOp::Ne => Ok(Value::Bool(left.not_equals(right)?)),
+            BinaryOp::Lt => Ok(Value::Bool(left.less_than(right)?)),
+            BinaryOp::Le => Ok(Value::Bool(left.less_or_equal(right)?)),
+            BinaryOp::Gt => Ok(Value::Bool(left.greater_than(right)?)),
+            BinaryOp::Ge => Ok(Value::Bool(left.greater_or_equal(right)?)),
+            
+            // Logical
+            BinaryOp::And => Ok(Value::Bool(left.is_truthy() && right.is_truthy())),
+            BinaryOp::Or => Ok(Value::Bool(left.is_truthy() || right.is_truthy())),
+            
+            // Arithmetic
+            BinaryOp::Add => {
+                match (left, right) {
+                    // String concatenation
+                    (Value::String(l), Value::String(r)) => Ok(Value::String(format!("{}{}", l, r))),
+                    (Value::String(l), r) => Ok(Value::String(format!("{}{}", l, r.display()))),
+                    (l, Value::String(r)) => Ok(Value::String(format!("{}{}", l.display(), r))),
+                    // Number addition
+                    (Value::Number(l), Value::Number(r)) => Ok(Value::Number(l + r)),
+                    _ => bail!("Cannot add {:?} and {:?}", left, right),
+                }
+            }
+            BinaryOp::Sub => {
+                match (left, right) {
+                    (Value::Number(l), Value::Number(r)) => Ok(Value::Number(l - r)),
+                    _ => bail!("Cannot subtract {:?} from {:?}", right, left),
+                }
+            }
+            BinaryOp::Mul => {
+                match (left, right) {
+                    (Value::Number(l), Value::Number(r)) => Ok(Value::Number(l * r)),
+                    _ => bail!("Cannot multiply {:?} and {:?}", left, right),
+                }
+            }
+            BinaryOp::Div => {
+                match (left, right) {
+                    (Value::Number(l), Value::Number(r)) => {
+                        if *r == 0.0 {
+                            bail!("Division by zero");
+                        }
+                        Ok(Value::Number(l / r))
+                    }
+                    _ => bail!("Cannot divide {:?} by {:?}", left, right),
+                }
+            }
+            BinaryOp::Mod => {
+                match (left, right) {
+                    (Value::Number(l), Value::Number(r)) => {
+                        if *r == 0.0 {
+                            bail!("Modulo by zero");
+                        }
+                        Ok(Value::Number(l % r))
+                    }
+                    _ => bail!("Cannot modulo {:?} by {:?}", left, right),
+                }
             }
         }
     }
     
-    context.unset_var(var);
-    context.check_passed(format!("foreach {} in [...]", var));
-    Ok(true)
-}
-
-fn execute_foreach_staged_files(
-    var: &str,
-    pattern: &str,
-    where_cond: &Option<githook_syntax::BlockCondition>,
-    body: &[Statement],
-    context: &mut ExecutionContext,
-    hook_args: &[String]
-) -> Result<bool> {
-    let files = context.staged_files(pattern)?;
-
-    if files.is_empty() {
-        return Ok(true);
-    }
-
-    for file in files {
-        context.enter_file(file.clone());
-        context.set_var(var.to_string(), file);
-
-        if let Some(cond) = where_cond
-            && !evaluate_block_condition(cond, context, hook_args)?
-        {
-            context.unset_var(var);
-            context.leave_file();
-            continue;
-        }
-
-        for statement in body {
-            if !execute_statement(statement, context, hook_args)? {
-                context.unset_var(var);
-                context.leave_file();
-                return Ok(false);
+    fn eval_unary_op(&self, op: UnaryOp, operand: &Value) -> Result<Value> {
+        match op {
+            UnaryOp::Not => Ok(Value::Bool(!operand.is_truthy())),
+            UnaryOp::Minus => {
+                match operand {
+                    Value::Number(n) => Ok(Value::Number(-n)),
+                    _ => bail!("Cannot negate {:?}", operand),
+                }
             }
         }
-
-        context.leave_file();
     }
-
-    context.unset_var(var);
-    context.check_passed(format!("foreach {} in staged_files matching '{}'", var, pattern));
-    Ok(true)
-}
-
-fn execute_parallel(commands: &[String], context: &mut ExecutionContext) -> Result<bool> {
-    use std::sync::{Arc, Mutex};
-    use std::thread;
-
-    context.check_run();
-
-    let results = Arc::new(Mutex::new(Vec::new()));
-    let mut handles = vec![];
-
-    for cmd in commands {
-        let cmd_str = substitute_placeholders(cmd, context).into_owned();
+    
+    fn eval_let_value(&self, value: &githook_syntax::ast::LetValue) -> Result<Value> {
+        use githook_syntax::ast::LetValue;
+        match value {
+            LetValue::String(s) => Ok(Value::String(s.clone())),
+            LetValue::Number(n) => Ok(Value::Number(*n)),
+            LetValue::Array(arr) => {
+                let vals: Vec<Value> = arr.iter()
+                    .map(|s| Value::String(s.clone()))
+                    .collect();
+                Ok(Value::Array(vals))
+            }
+            LetValue::Expression(expr) => self.eval_expression(expr),
+        }
+    }
+    
+    fn eval_closure_method(&self, obj: &Value, method: &str, param: &str, body: &Expression) -> Result<Value> {
+        match obj {
+            Value::Array(arr) => {
+                match method {
+                    "filter" => {
+                        let mut result = Vec::new();
+                        for item in arr {
+                            let mut scoped_executor: Executor = (*self).clone();
+                            scoped_executor.set_variable(param.to_string(), item.clone());
+                            let predicate_result = scoped_executor.eval_expression(body)?;
+                            if predicate_result.is_truthy() {
+                                result.push(item.clone());
+                            }
+                        }
+                        Ok(Value::Array(result))
+                    }
+                    "map" => {
+                        let mut result = Vec::new();
+                        for item in arr {
+                            let mut scoped_executor: Executor = (*self).clone();
+                            scoped_executor.set_variable(param.to_string(), item.clone());
+                            let mapped_value = scoped_executor.eval_expression(body)?;
+                            result.push(mapped_value);
+                        }
+                        Ok(Value::Array(result))
+                    }
+                    "find" => {
+                        for item in arr {
+                            let mut scoped_executor: Executor = (*self).clone();
+                            scoped_executor.set_variable(param.to_string(), item.clone());
+                            let predicate_result = scoped_executor.eval_expression(body)?;
+                            if predicate_result.is_truthy() {
+                                return Ok(item.clone());
+                            }
+                        }
+                        Ok(Value::Null)
+                    }
+                    "any" => {
+                        for item in arr {
+                            let mut scoped_executor: Executor = (*self).clone();
+                            scoped_executor.set_variable(param.to_string(), item.clone());
+                            let predicate_result = scoped_executor.eval_expression(body)?;
+                            if predicate_result.is_truthy() {
+                                return Ok(Value::Bool(true));
+                            }
+                        }
+                        Ok(Value::Bool(false))
+                    }
+                    "all" => {
+                        for item in arr {
+                            let mut scoped_executor: Executor = (*self).clone();
+                            scoped_executor.set_variable(param.to_string(), item.clone());
+                            let predicate_result = scoped_executor.eval_expression(body)?;
+                            if !predicate_result.is_truthy() {
+                                return Ok(Value::Bool(false));
+                            }
+                        }
+                        Ok(Value::Bool(true))
+                    }
+                    _ => bail!("Unknown closure method: {}", method),
+                }
+            }
+            _ => bail!("Cannot call closure method '{}' on non-array value", method),
+        }
+    }
+    
+    // ========================================================================
+    // STATEMENT EXECUTION
+    // ========================================================================
+    
+    pub fn execute_statements(&mut self, statements: &[Statement]) -> Result<ExecutionResult> {
+        for stmt in statements {
+            let result = self.execute_statement(stmt)?;
+            if result.should_stop() || result.is_break() || result.is_continue() {
+                return Ok(result);
+            }
+        }
+        Ok(ExecutionResult::Continue)
+    }
+    
+    pub fn execute_statement(&mut self, stmt: &Statement) -> Result<ExecutionResult> {
+        match stmt {
+            Statement::Run { command, span: _ } => {
+                let interpolated = self.interpolate_string(command)?;
+                self.run_command(&interpolated)?;
+                self.tests_run += 1;
+                Ok(ExecutionResult::Continue)
+            }
+            
+            Statement::Block { message, span: _ } => {
+                // Block means "stop and show message" - like a hard block
+                self.blocks.push(message.clone());
+                Ok(ExecutionResult::Blocked)
+            }
+            
+            Statement::Warn { message, span: _ } => {
+                let interpolated = self.interpolate_string(message)?;
+                self.warnings.push(interpolated);
+                Ok(ExecutionResult::Continue)
+            }
+            
+            Statement::Allow { command, span: _ } => {
+                if self.verbose {
+                    println!("o Explicitly allowed: {}", command);
+                }
+                Ok(ExecutionResult::Continue)
+            }
+            
+            Statement::Parallel { commands, span: _ } => {
+                // TODO: Implement parallel execution
+                // For now, sequential
+                for cmd in commands {
+                    self.run_command(cmd)?;
+                }
+                Ok(ExecutionResult::Continue)
+            }
+            
+            Statement::Let { name, value, span: _ } => {
+                let val = self.eval_let_value(value)?;
+                self.variables.insert(name.clone(), val);
+                Ok(ExecutionResult::Continue)
+            }
+            
+            Statement::Break { span: _ } => {
+                Ok(ExecutionResult::Break)
+            }
+            
+            Statement::Continue { span: _ } => {
+                Ok(ExecutionResult::ContinueLoop)
+            }
+            
+            Statement::ForEach { collection, var, where_clause: _, body, span: _ } => {
+                let coll_value = self.eval_expression(collection)?;
+                self.execute_foreach(&coll_value, var, body)
+            }
+            
+            Statement::If { condition, then_body, else_body, span: _ } => {
+                let cond = self.eval_expression(condition)?;
+                if cond.is_truthy() {
+                    self.execute_statements(then_body)
+                } else if let Some(else_stmts) = else_body {
+                    self.execute_statements(else_stmts)
+                } else {
+                    Ok(ExecutionResult::Continue)
+                }
+            }
+            
+            Statement::BlockIf { condition, message, interactive, span: _ } => {
+                let cond = self.eval_expression(condition)?;
+                if cond.is_truthy() {
+                    let msg = if let Some(m) = message {
+                        self.interpolate_string(m)?
+                    } else {
+                        "Condition failed".to_string()
+                    };
+                    self.blocks.push(msg);
+                    self.tests_run += 1;
+                    if interactive.is_some() {
+                        // TODO: Interactive prompts
+                    }
+                    return Ok(ExecutionResult::Blocked);
+                }
+                Ok(ExecutionResult::Continue)
+            }
+            
+            Statement::WarnIf { condition, message, interactive, span: _ } => {
+                let cond = self.eval_expression(condition)?;
+                if cond.is_truthy() {
+                    let msg = if let Some(m) = message {
+                        self.interpolate_string(m)?
+                    } else {
+                        "Warning".to_string()
+                    };
+                    self.warnings.push(msg);
+                    self.tests_run += 1;
+                    if interactive.is_some() {
+                        // TODO: Interactive prompts
+                    }
+                }
+                Ok(ExecutionResult::Continue)
+            }
+            
+            Statement::Match { subject, arms, span: _ } => {
+                let subj_value = self.eval_expression(subject)?;
+                let arm_tuples: Vec<_> = arms.iter()
+                    .map(|arm| (arm.pattern.clone(), arm.body.clone()))
+                    .collect();
+                self.execute_match(&subj_value, &arm_tuples)
+            }
+            
+            Statement::MacroDef { name, params, body, span: _ } => {
+                // Store macro definition
+                self.macros.insert(name.clone(), (params.clone(), body.clone()));
+                Ok(ExecutionResult::Continue)
+            }
+            
+            Statement::MacroCall { namespace, name, args, span: _ } => {
+                // Lookup macro
+                if namespace.is_some() {
+                    bail!("Namespaced macros not yet supported: {:?}::{}", namespace, name);
+                }
+                
+                let (params, body) = self.macros.get(name)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("Macro '{}' not defined", name))?;
+                
+                // Check parameter count
+                if params.len() != args.len() {
+                    bail!("Macro '{}' expects {} parameters, got {}", name, params.len(), args.len());
+                }
+                
+                // Save current variables
+                let saved_vars = self.variables.clone();
+                
+                // Bind parameters
+                for (param, arg) in params.iter().zip(args.iter()) {
+                    let arg_value = self.eval_expression(arg)?;
+                    self.variables.insert(param.clone(), arg_value);
+                }
+                
+                // Execute macro body
+                let result = self.execute_statements(&body);
+                
+                // Restore variables (but keep any new bindings from macro)
+                for (key, value) in saved_vars {
+                    if !self.variables.contains_key(&key) {
+                        self.variables.insert(key, value);
+                    }
+                }
+                
+                result
+            }
+            
+            Statement::Import { path, alias, span: _ } => {
+                // Import local .ghook file
+                let file_path = std::path::Path::new(path);
+                
+                // Resolve relative to current file or workspace
+                let import_path = if file_path.is_absolute() {
+                    file_path.to_path_buf()
+                } else {
+                    // Assume relative to .githook directory for now
+                    std::path::PathBuf::from(".githook").join(path)
+                };
+                
+                if !import_path.exists() {
+                    bail!("Import file not found: {}", path);
+                }
+                
+                // Read and parse imported file
+                let source = std::fs::read_to_string(&import_path)
+                    .with_context(|| format!("Failed to read import file: {}", path))?;
+                
+                let tokens = githook_syntax::lexer::tokenize(&source)
+                    .with_context(|| format!("Failed to tokenize import file: {}", path))?;
+                
+                let statements = githook_syntax::parser::parse(tokens)
+                    .with_context(|| format!("Failed to parse import file: {}", path))?;
+                
+                // Execute imported statements
+                if let Some(alias_name) = alias {
+                    // TODO: Support namespaced imports with alias
+                    // For now just execute directly
+                    if self.verbose {
+                        println!("Importing '{}' as '{}'", path, alias_name);
+                    }
+                }
+                
+                self.execute_statements(&statements)
+            }
+            
+            Statement::Use { package, alias, span: _ } => {
+                // Use external package: use "@namespace/name"
+                if !package.starts_with('@') {
+                    bail!("Package must start with '@', e.g. '@preview/quality'");
+                }
+                
+                let package_path = &package[1..]; // Remove @
+                let parts: Vec<&str> = package_path.split('/').collect();
+                
+                if parts.len() != 2 {
+                    bail!("Invalid package format. Expected '@namespace/name', got '{}'", package);
+                }
+                
+                let namespace = parts[0];
+                let name = parts[1];
+                
+                // Load package (auto-fetches if not cached)
+                let source = crate::package_resolver::load_package(namespace, name)
+                    .with_context(|| format!("Failed to load package: {}", package))?;
+                
+                let tokens = githook_syntax::lexer::tokenize(&source)
+                    .with_context(|| format!("Failed to tokenize package: {}", package))?;
+                
+                let statements = githook_syntax::parser::parse(tokens)
+                    .with_context(|| format!("Failed to parse package: {}", package))?;
+                
+                // Execute package statements
+                if let Some(alias_name) = alias {
+                    if self.verbose {
+                        println!("Using package '{}' as '{}'", package, alias_name);
+                    }
+                }
+                
+                self.execute_statements(&statements)
+            }
+            
+            Statement::Group { name, severity, enabled, body, span: _ } => {
+                if !enabled {
+                    if self.verbose {
+                        println!("⏭️  Group '{}' is disabled, skipping", name);
+                    }
+                    return Ok(ExecutionResult::Continue);
+                }
+                
+                if self.verbose {
+                    let sev = severity.as_ref()
+                        .map(|s| format!(" [{:?}]", s))
+                        .unwrap_or_default();
+                    println!("--- Group: {}{} ---", name, sev);
+                }
+                let result = self.execute_statements(body)?;
+                if self.verbose {
+                    println!("--- End: {} ---", name);
+                }
+                Ok(result)
+            }
+            
+            Statement::Try { body, catch_var, catch_body, span: _ } => {
+                // Execute try body
+                let result = self.execute_statements(body);
+                
+                match result {
+                    Ok(exec_result) => Ok(exec_result),
+                    Err(e) => {
+                        // Error occurred, execute catch body
+                        if let Some(var_name) = catch_var {
+                            // Bind error message to variable
+                            self.variables.insert(var_name.clone(), Value::String(e.to_string()));
+                        }
+                        
+                        // Execute catch body
+                        self.execute_statements(catch_body)
+                    }
+                }
+            }
+        }
+    }
+    
+    fn execute_foreach(&mut self, collection: &Value, var_name: &str, body: &[Statement]) -> Result<ExecutionResult> {
+        let items = match collection {
+            Value::Array(arr) => arr.clone(),
+            Value::Object(obj) if obj.type_name == "Git" => {
+                // git.all_files
+                if let Some(Value::Array(files)) = obj.get("all_files") {
+                    files.clone()
+                } else {
+                    Vec::new()
+                }
+            }
+            _ => bail!("Cannot iterate over {:?}", collection),
+        };
         
-        let (program, args) = match parse_command(&cmd_str) {
-            Ok(parsed) => parsed,
-            Err(e) => {
-                let mut res = results.lock()
-                    .expect("Parallel results mutex should not be poisoned");
-                res.push((cmd_str, false, Err(std::io::Error::other(format!("parse error: {}", e)))));
+        // Track if collection was empty
+        if items.is_empty() {
+            self.tests_run += 1; // Count foreach as 1 check even if empty
+        }
+        
+        for item in items {
+            // Set loop variable
+            let old_value = self.variables.insert(var_name.to_string(), item);
+            
+            // Execute body - this will increment tests_run for each check
+            let result = self.execute_statements(body)?;
+            
+            // Restore old value
+            if let Some(old) = old_value {
+                self.variables.insert(var_name.to_string(), old);
+            } else {
+                self.variables.remove(var_name);
+            }
+            
+            // Handle break: exit the loop
+            if result.is_break() {
+                return Ok(ExecutionResult::Continue);
+            }
+            
+            // Handle continue: skip to next iteration
+            if result.is_continue() {
                 continue;
             }
-        };
+            
+            if result.should_stop() {
+                return Ok(result);
+            }
+        }
         
-        if program.is_empty() {
-            let mut res = results.lock()
-                .expect("Parallel results mutex should not be poisoned");
-            res.push((cmd_str, false, Err(std::io::Error::other("empty command"))));
-            continue;
-        }
-
-        let results = Arc::clone(&results);
-
-        let handle = thread::spawn(move || {
-            let output = Command::new(&program).args(&args).output();
-
-            let success = match output {
-                Ok(ref out) => out.status.success(),
-                Err(_) => false,
-            };
-
-            let mut res = results.lock()
-                .expect("Parallel results mutex should not be poisoned");
-            res.push((cmd_str, success, output));
-        });
-
-        handles.push(handle);
-    }
-
-    let mut joins_ok = true;
-    for handle in handles {
-        if handle.join().is_err() {
-            joins_ok = false;
-        }
-    }
-
-    let results = results.lock()
-        .expect("Parallel results mutex should not be poisoned");
-    let mut all_passed = true;
-
-    if !joins_ok || results.len() != commands.len() {
-        all_passed = false;
-        println!("  {} Parallel execution failed", "x".red());
-    }
-
-    for (cmd, success, output) in results.iter() {
-        if !*success {
-            println!("  {} {}", "x".red(), cmd.red());
-            all_passed = false;
-
-            if let Ok(output) = output
-                && !output.stderr.is_empty()
-            {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                for line in stderr.lines() {
-                    println!("    {}", line.dimmed());
-                }
-            }
-        }
-    }
-
-    if !all_passed {
-        return Ok(false);
-    }
-
-    context.check_passed(format!("Parallel execution of {} commands", commands.len()));
-    Ok(true)
-}
-
-fn execute_staged_content_validation(
-    must: bool,
-    check: &ContentCheck,
-    pattern: &Option<String>,
-    context: &mut ExecutionContext
-) -> Result<bool> {
-    context.check_run();
-
-    let files = if let Some(pattern) = pattern {
-        context.staged_files(pattern)?
-    } else if let Some(file) = context.current_file() {
-        vec![file.to_string()]
-    } else {
-        context.staged_files("*")?
-    };
-
-    let mut content = String::new();
-    for file in &files {
-        let file_content = githook_git::get_staged_file_content_from_index(file)?;
-        content.push_str(&file_content);
-        content.push('\n');
-    }
-
-    let result = match check {
-        ContentCheck::Match(pattern, _) => {
-            let regex = Regex::new(pattern)?;
-            regex.is_match(&content)
-        }
-        ContentCheck::Contain(text, _) => content.contains(text),
-    };
-
-    let passed = if must { result } else { !result };
-
-    if !passed {
-        let check_desc = match check {
-            ContentCheck::Match(p, _) => format!("match pattern '{}'", p),
-            ContentCheck::Contain(t, _) => format!("contain '{}'", t),
-        };
-        let must_str = if must { "must" } else { "must not" };
-        println!("  {} staged_content {} {}", "x".red(), must_str.red(), check_desc.red());
-        return Ok(false);
-    }
-
-    let check_desc = match check {
-        ContentCheck::Match(p, _) => format!(
-            "staged_content must{} match '{}'",
-            if must { "" } else { " not" },
-            p
-        ),
-        ContentCheck::Contain(t, _) => format!(
-            "staged_content must{} contain '{}'",
-            if must { "" } else { " not" },
-            t
-        ),
-    };
-    context.check_passed(check_desc);
-    Ok(true)
-}
-
-fn execute_staged_content_foreach(pattern: &str, body: &[Statement], context: &mut ExecutionContext, hook_args: &[String]) -> Result<bool> {
-    let files = context.staged_files(pattern)?;
-
-    if files.is_empty() {
-        return Ok(true);
-    }
-
-    for file in files {
-        context.set_current_file(Some(file));
-        for stmt in body {
-            if !execute_statement(stmt, context, hook_args)? {
-                context.set_current_file(None);
-                return Ok(false);
-            }
-        }
-    }
-
-    context.set_current_file(None);
-    context.check_passed(format!("staged_content foreach '{}'", pattern));
-    Ok(true)
-}
-
-fn execute_allow_command(cmd: &str, context: &mut ExecutionContext) -> Result<bool> {
-    context.add_allowed_command(cmd.to_string());
-    context.check_passed(format!("allow '{}'", cmd));
-    Ok(true)
-}
-
-fn execute_staged_files(pattern: &str, body: &[Statement], context: &mut ExecutionContext, hook_args: &[String]) -> Result<bool> {
-    let files = context.staged_files(pattern)?;
-
-    if files.is_empty() {
-        return Ok(true);
-    }
-
-    context.set_file_pattern(Some(pattern.to_string()));
-
-    for file in files {
-        context.enter_file(file.clone());
-
-        for stmt in body {
-            if !execute_statement(stmt, context, hook_args)? {
-                context.leave_file();
-                context.set_file_pattern(None);
-                return Ok(false);
-            }
-        }
-
-        context.leave_file();
-    }
-
-    context.set_file_pattern(None);
-    context.check_passed(format!("staged_files matching '{}'", pattern));
-    Ok(true)
-}
-
-fn execute_all_files(pattern: &str, body: &[Statement], context: &mut ExecutionContext, hook_args: &[String]) -> Result<bool> {
-    let files = githook_git::get_all_files(pattern)?;
-
-    if files.is_empty() {
-        return Ok(true);
-    }
-
-    context.set_file_pattern(Some(pattern.to_string()));
-
-    for stmt in body {
-        if !execute_statement(stmt, context, hook_args)? {
-            context.set_file_pattern(None);
-            return Ok(false);
-        }
-    }
-
-    context.set_file_pattern(None);
-    Ok(true)
-}
-
-fn execute_file_rule(pattern: &str, must_be_staged: bool, context: &mut ExecutionContext) -> Result<bool> {
-    let staged = githook_git::is_file_staged(pattern)?;
-
-    if must_be_staged {
-        if !staged {
-            println!("  {} File matching {} must be staged!", "x".red(), pattern.red());
-            return Ok(false);
-        }
-        context.check_passed(format!("File '{}' must be staged", pattern));
-    } else {
-        if staged {
-            println!("  {} File matching {} must not be staged!", "x".red(), pattern.red());
-            return Ok(false);
-        }
-        context.check_passed(format!("File '{}' must not be staged", pattern));
-    }
-    Ok(true)
-}
-
-fn execute_content_validation(
-    scope: &ContentScope,
-    must: bool,
-    check: &ContentCheck,
-    pattern: &Option<String>,
-    context: &mut ExecutionContext
-) -> Result<bool> {
-    context.check_run();
-
-    let context_pattern = context.file_pattern();
-    let file_pattern = pattern
-        .as_deref()
-        .or(context_pattern)
-        .unwrap_or("*");
-
-    let content = match scope {
-        ContentScope::Content(_) => {
-            if let Some(file) = context.current_file() {
-                githook_git::get_staged_file_content_from_index(file)?
-            } else {
-                githook_git::get_staged_file_content(file_pattern)?
-            }
-        }
-        ContentScope::Diff(_) => githook_git::get_diff_added_lines()?,
-    };
-
-    let scope_name = match scope {
-        ContentScope::Content(_) => "content",
-        ContentScope::Diff(_) => "diff",
-    };
-
-    let result = match check {
-        ContentCheck::Match(pattern, _) => {
-            let regex = Regex::new(pattern)?;
-            regex.is_match(&content)
-        }
-        ContentCheck::Contain(text, _) => content.contains(text),
-    };
-
-    let passed = if must { result } else { !result };
-
-    if !passed {
-        let check_desc = match check {
-            ContentCheck::Match(p, _) => format!("match pattern '{}'", p),
-            ContentCheck::Contain(t, _) => format!("contain '{}'", t),
-        };
-        let must_str = if must { "must" } else { "must not" };
-        println!("  {} {} {} {}", "x".red(), scope_name.red(), must_str.red(), check_desc.red());
-        return Ok(false);
-    }
-
-    let check_desc = match check {
-        ContentCheck::Match(p, _) => format!(
-            "{} must{} match '{}'",
-            scope_name,
-            if must { "" } else { " not" },
-            p
-        ),
-        ContentCheck::Contain(t, _) => format!(
-            "{} must{} contain '{}'",
-            scope_name,
-            if must { "" } else { " not" },
-            t
-        ),
-    };
-
-    context.check_passed(check_desc);
-    Ok(true)
-}
-
-fn execute_conditional_rule(
-    severity: &RuleSeverity,
-    condition: &githook_syntax::BlockCondition,
-    message: &Option<String>,
-    interactive: &Option<String>,
-    context: &mut ExecutionContext,
-    hook_args: &[String]
-) -> Result<bool> {
-    context.check_run();
-
-    let result = evaluate_block_condition(condition, context, hook_args)?;
-
-    let default_message = condition.default_message();
-    let raw_message = message.as_deref().unwrap_or(&default_message);
-    let message_cow = substitute_placeholders(raw_message, context);
-    let message_str = message_cow.as_ref();
-
-    if result {
-        match severity {
-            RuleSeverity::Warn(_) => {
-                println!("  {} {}", "-".yellow(), message_str.yellow());
-
-                if let Some(prompt) = interactive {
-                    if atty::is(atty::Stream::Stdin) {
-                        let prompt_cow = substitute_placeholders(prompt, context);
-                        println!("\n  {} {}", "?".cyan(), prompt_cow.cyan());
-                        print!("    Continue? (y/n): ");
-                        std::io::Write::flush(&mut std::io::stdout()).ok();
-
-                        let mut input = String::new();
-                        match std::io::stdin().read_line(&mut input) {
-                            Ok(_) => {
-                                let answer = input.trim().to_lowercase();
-                                if answer != "y" && answer != "yes" {
-                                    println!("  {} Aborted by user", "x".red());
-                                    return Ok(false);
-                                }
-                            }
-                            Err(_) => {
-                                println!("  {} (Skipping interactive prompt - no TTY)", "!".yellow());
-                            }
-                        }
-                    } else {
-                        println!("  {} (Skipping interactive prompt - running in non-interactive mode)", "!".yellow());
-                    }
-                }
-
-                context.warn(message_str.to_string());
-                return Ok(true);
-            }
-            RuleSeverity::Block(_) => {
-                println!("  {} {}", "x".red(), message_str.red());
-                context.fail_check(message_str.to_string());
-                return Ok(false);
-            }
-        }
-    }
-
-    Ok(true)
-}
-
-fn execute_message_validation(must: bool, check: &MessageCheck, context: &mut ExecutionContext, hook_args: &[String]) -> Result<bool> {
-    context.check_run();
-
-    let msg = githook_git::get_commit_message_from_hook_args(hook_args)?;
-    let result = match check {
-        MessageCheck::Match(pattern, _) => {
-            let regex = Regex::new(pattern)?;
-            regex.is_match(&msg)
-        }
-        MessageCheck::Contain(text, _) => msg.contains(text),
-    };
-
-    let passed = if must { result } else { !result };
-
-    if !passed {
-        let check_desc = match check {
-            MessageCheck::Match(p, _) => format!("match pattern '{}'", p),
-            MessageCheck::Contain(t, _) => format!("contain '{}'", t),
-        };
-        let must_str = if must { "must" } else { "must not" };
-        println!("  {} Commit message {} {}", "x".red(), must_str.red(), check_desc.red());
-        println!("    Message: {}", msg.dimmed());
-        return Ok(false);
-    }
-
-    let check_desc = match check {
-        MessageCheck::Match(p, _) => format!(
-            "Commit message must{} match '{}'",
-            if must { "" } else { " not" },
-            p
-        ),
-        MessageCheck::Contain(t, _) => format!(
-            "Commit message must{} contain '{}'",
-            if must { "" } else { " not" },
-            t
-        ),
-    };
-
-    context.check_passed(check_desc);
-    Ok(true)
-}
-
-//
-fn execute_macro_definition(name: String, params: Vec<String>, body: Vec<Statement>, context: &mut ExecutionContext) -> Result<bool> {
-    context.define_macro(name, params, body);
-    Ok(true)
-}
-
-//
-pub fn execute_macro_call(namespace: Option<&str>, name: &str, args: &[Argument], context: &mut ExecutionContext, hook_args: &[String]) -> Result<bool> {
-    let lookup_name = if let Some(ns) = namespace {
-        format!("{}:{}", ns, name)
-    } else {
-        name.to_string()
-    };
-
-    let snippet = context.get_macro(&lookup_name)
-        .or_else(|| context.get_macro(name))
-        .ok_or_else(|| anyhow::anyhow!("Undefined macro @{}", if namespace.is_some() { &lookup_name } else { name }))?
-        .clone();
-
-    if args.len() != snippet.params.len() {
-        bail!("macro @{} expects {} arguments, got {}", lookup_name, snippet.params.len(), args.len());
-    }
-
-    for (param, arg) in snippet.params.iter().zip(args.iter()) {
-        let value = match arg {
-            Argument::String(s, _) => s.clone(),
-            Argument::Number(n, _) => n.to_string(),
-            Argument::Identifier(id, _) => id.clone(),
-            Argument::Array(_, _) => {
-                bail!("Array arguments are not supported in macro calls");
-            }
-        };
-        context.set_param(param.clone(), value);
+        Ok(ExecutionResult::Continue)
     }
     
-    for statement in &snippet.body {
-        if !execute_statement(statement, context, hook_args)? {
-            context.clear_params();
-            return Ok(false);
-        }
-    }
-
-    context.clear_params();
-    Ok(true)
-}
-
-fn execute_use_statement(
-    namespace: &str,
-    name: &str,
-    alias: Option<&str>,
-    context: &mut ExecutionContext,
-    hook_args: &[String],
-) -> Result<bool> {
-    use crate::package_resolver;
-
-    let content = package_resolver::load_package(namespace, name)?;
-
-    let tokens = githook_syntax::tokenize_with_spans(&content)?;
-    let statements = githook_syntax::parse_spanned(tokens)
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
-
-    let package_ns = alias.unwrap_or(name);
-
-    for statement in statements {
-        let scoped_statement = if let githook_syntax::Statement::MacroDefinition { name: macro_name, params, body, span } = &statement {
-            githook_syntax::Statement::MacroDefinition {
-                name: format!("{}:{}", package_ns, macro_name),
-                params: params.clone(),
-                body: body.clone(),
-                span: *span,
-            }
-        } else {
-            statement
-        };
-
-        if !execute_statement(&scoped_statement, context, hook_args)? {
-            return Ok(false);
-        }
-    }
-
-    Ok(true)
-}
-
-fn execute_import_statement(
-    path: &str,
-    alias: Option<&str>,
-    context: &mut ExecutionContext,
-    hook_args: &[String],
-) -> Result<bool> {
-    use std::path::Path;
-
-    let file_path = if Path::new(path).is_absolute() {
-        path.to_string()
-    } else {
-        let cwd = std::env::current_dir()?;
-        cwd.join(path).to_string_lossy().to_string()
-    };
-
-    let content = std::fs::read_to_string(&file_path)?;
-    let tokens = githook_syntax::tokenize_with_spans(&content)?;
-    let statements = githook_syntax::parse_spanned(tokens)
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
-
-    for statement in statements {
-        let scoped_statement = if let githook_syntax::Statement::MacroDefinition { name: macro_name, params, body, span } = &statement {
-            if let Some(alias_ns) = alias {
-                githook_syntax::Statement::MacroDefinition {
-                    name: format!("{}:{}", alias_ns, macro_name),
-                    params: params.clone(),
-                    body: body.clone(),
-                    span: *span,
-                }
-            } else {
-                statement
-            }
-        } else {
-            statement
-        };
-
-        if !execute_statement(&scoped_statement, context, hook_args)? {
-            return Ok(false);
-        }
-    }
-
-    Ok(true)
-}
-
-fn execute_when_statement(condition: &githook_syntax::BlockCondition, body: &[Statement], else_body: &Option<Vec<Statement>>, context: &mut ExecutionContext, hook_args: &[String]) -> Result<bool> {
-    let result = evaluate_block_condition(condition, context, hook_args)?;
-
-    if result {
-        for statement in body {
-            if !execute_statement(statement, context, hook_args)? {
-                return Ok(false);
+    fn execute_match(&mut self, subject: &Value, arms: &[(MatchPattern, Vec<Statement>)]) -> Result<ExecutionResult> {
+        for (pattern, body) in arms {
+            if self.pattern_matches(pattern, subject)? {
+                return self.execute_statements(body);
             }
         }
-    } else if let Some(else_stmts) = else_body {
-        for statement in else_stmts {
-            if !execute_statement(statement, context, hook_args)? {
-                return Ok(false);
-            }
-        }
-    }
-
-    context.check_passed(format!("when condition evaluated to {}", result));
-    Ok(true)
-}
-
-pub fn execute_statement(
-    statement: &Statement,
-    context: &mut ExecutionContext,
-    hook_args: &[String],
-) -> Result<bool> {
-    match statement {
-        Statement::Run(cmd, _) => execute_run(cmd, context),
-        Statement::BoolLiteral(value, _) => execute_bool_literal(*value, context),
-        Statement::Group { definition, span: _ } => execute_group(definition, context, hook_args),
-        Statement::LetStringList { name, items, .. } => execute_let_string_list(name.clone(), items.clone(), context),
-        Statement::Block(msg, _) => execute_block(msg),
-        Statement::ForEachStringList { var, list, body, .. } => execute_foreach_string_list(var, list, body, context, hook_args),
-        Statement::ForEachArray { var, items, body, .. } => execute_foreach_array(var, items, body, context, hook_args),
-        Statement::ForEachStagedFiles { var, pattern, where_cond, body, .. } => {
-            execute_foreach_staged_files(var, pattern, where_cond, body, context, hook_args)
-        }
-        Statement::Parallel { commands, .. } => execute_parallel(commands, context),
-        Statement::StagedFiles { pattern, body, .. } => execute_staged_files(pattern, body, context, hook_args),
-        Statement::StagedContentValidation { must, check, pattern, .. } => {
-            execute_staged_content_validation(*must, check, pattern, context)
-        }
-        Statement::StagedContentForeach { pattern, body, .. } => execute_staged_content_foreach(pattern, body, context, hook_args),
-        Statement::AllowCommand(cmd, _) => execute_allow_command(cmd, context),
-        Statement::AllFiles { pattern, body, .. } => execute_all_files(pattern, body, context, hook_args),
-        Statement::FileRule { pattern, must_be_staged, .. } => execute_file_rule(pattern, *must_be_staged, context),
-        Statement::ContentValidation { scope, must, check, pattern, .. } => {
-            execute_content_validation(scope, *must, check, pattern, context)
-        }
-        Statement::ConditionalRule { severity, condition, message, interactive, .. } => {
-            execute_conditional_rule(severity, condition, message, interactive, context, hook_args)
-        }
-        Statement::MessageValidation { must, check, .. } => execute_message_validation(*must, check, context, hook_args),
         
-        Statement::MacroDefinition { name, params, body, span: _ } => {
-            execute_macro_definition(name.clone(), params.clone(), body.clone(), context)
+        // No match found
+        Ok(ExecutionResult::Continue)
+    }
+    
+    fn pattern_matches(&self, pattern: &MatchPattern, value: &Value) -> Result<bool> {
+        match pattern {
+            MatchPattern::Expression(expr, _) => {
+                let pattern_val = self.eval_expression(expr)?;
+                value.equals(&pattern_val)
+            }
+            
+            MatchPattern::Wildcard(s, _) => {
+                // Simple glob matching
+                let value_str = value.as_string()?;
+                let pattern_str = s.as_str();
+                
+                if pattern_str.contains('*') {
+                    // Convert glob to regex
+                    let regex_pattern = pattern_str
+                        .replace(".", "\\.")
+                        .replace("*", ".*");
+                    let regex = regex::Regex::new(&format!("^{}$", regex_pattern))?;
+                    Ok(regex.is_match(&value_str))
+                } else {
+                    Ok(value_str == pattern_str)
+                }
+            }
+            
+            MatchPattern::Underscore(_) => Ok(true),
         }
-        Statement::MacroCall { namespace, name, args, .. } => execute_macro_call(namespace.as_deref(), name, args, context, hook_args),
-        Statement::When { condition, body, else_body, span: _ } => {
-            execute_when_statement(condition, body, else_body, context, hook_args)
+    }
+    
+    // ========================================================================
+    // HELPERS
+    // ========================================================================
+    
+    fn interpolate_string(&self, s: &str) -> Result<String> {
+        let mut result = String::new();
+        let mut chars = s.chars().peekable();
+        
+        while let Some(ch) = chars.next() {
+            if ch == '$' && chars.peek() == Some(&'{') {
+                chars.next(); // consume '{'
+                
+                // Extract expression until '}'
+                let mut expr_str = String::new();
+                let mut depth = 1;
+                while let Some(ch) = chars.next() {
+                    if ch == '{' {
+                        depth += 1;
+                        expr_str.push(ch);
+                    } else if ch == '}' {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                        expr_str.push(ch);
+                    } else {
+                        expr_str.push(ch);
+                    }
+                }
+                
+                // Parse the expression properly using the parser
+                use githook_syntax::lexer::tokenize;
+                use githook_syntax::parser::Parser;
+                
+                let tokens = tokenize(&expr_str)?;
+                let mut expr_parser = Parser::new(tokens);
+                let expr = expr_parser.parse_expression()?;
+                
+                let value = self.eval_expression(&expr)?;
+                result.push_str(&value.display());
+            } else {
+                result.push(ch);
+            }
         }
-        Statement::Match { subject, arms, span: _ } => {
-            execute_match_statement(subject, arms, context, hook_args)
+        
+        Ok(result)
+    }
+    
+    fn run_command(&self, cmd: &str) -> Result<()> {
+        if self.verbose {
+            println!("> Running: {}", cmd);
         }
-        Statement::Use { namespace, name, alias, .. } => {
-            execute_use_statement(namespace, name, alias.as_deref(), context, hook_args)
+        
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg(cmd)
+            .output()
+            .context(format!("Failed to execute command: {}", cmd))?;
+        
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("Command failed: {}\n{}", cmd, stderr);
         }
-        Statement::Import { path, alias, .. } => {
-            execute_import_statement(path, alias.as_deref(), context, hook_args)
+        
+        // Always print stdout from commands
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if !stdout.is_empty() {
+            print!("{}", stdout);
         }
+        
+        Ok(())
+    }
+    
+    fn create_git_object(&self) -> Value {
+        let mut git = Object::new("Git");
+        
+        // Get git context from githook-git crate
+        let git_context = githook_git::GitContext::new();
+        
+        // all_files array
+        let all_files: Vec<Value> = git_context.all_files.iter()
+            .map(|path| Value::file_object(path.clone()))
+            .collect();
+        git.set("all_files", Value::Array(all_files));
+        
+        // staged_files array
+        let staged_files: Vec<Value> = git_context.staged_files.iter()
+            .map(|path| Value::file_object(path.clone()))
+            .collect();
+        git.set("staged_files", Value::Array(staged_files));
+        
+        // branch object
+        let mut branch = Object::new("Branch");
+        branch.set("name", Value::String(git_context.branch.name));
+        git.set("branch", Value::Object(branch));
+        
+        // commit object (null if no commit exists)
+        let commit_value = if let Some(commit_info) = git_context.commit {
+            let mut commit = Object::new("Commit");
+            commit.set("message", Value::String(commit_info.message));
+            commit.set("hash", Value::String(commit_info.hash));
+            Value::Object(commit)
+        } else {
+            Value::Null
+        };
+        git.set("commit", commit_value);
+        
+        // author object
+        let mut author = Object::new("Author");
+        author.set("name", Value::String(git_context.author.name));
+        author.set("email", Value::String(git_context.author.email));
+        git.set("author", Value::Object(author));
+        
+        // remote object
+        let mut remote = Object::new("Remote");
+        remote.set("name", Value::String(git_context.remote.name));
+        remote.set("url", Value::String(git_context.remote.url));
+        git.set("remote", Value::Object(remote));
+        
+        // stats object
+        let mut stats = Object::new("Stats");
+        stats.set("files_changed", Value::Number(git_context.stats.files_changed as f64));
+        stats.set("additions", Value::Number(git_context.stats.additions as f64));
+        stats.set("deletions", Value::Number(git_context.stats.deletions as f64));
+        stats.set("modified_lines", Value::Number((git_context.stats.additions + git_context.stats.deletions) as f64));
+        git.set("stats", Value::Object(stats));
+        
+        // boolean flags
+        git.set("is_merge_commit", Value::Bool(git_context.is_merge_commit));
+        git.set("has_conflicts", Value::Bool(git_context.has_conflicts));
+        
+        Value::Object(git)
     }
 }
 
-fn execute_match_statement(
-    subject: &MatchSubject,
-    arms: &[MatchArm],
-    context: &mut ExecutionContext,
-    hook_args: &[String],
-) -> Result<bool> {
-    let value_to_match = match subject {
-        MatchSubject::File(_) => {
-            context.current_file.clone().ok_or_else(|| {
-                anyhow::anyhow!("'match file' requires a current file (use inside foreach staged_files ...)")
-            })?
-        }
-        MatchSubject::Content(_) => {
-            let file = context.current_file.as_ref().ok_or_else(|| {
-                anyhow::anyhow!("'match content' requires a current file (use inside foreach staged_files ...)")
-            })?;
-            std::fs::read_to_string(file)
-                .with_context(|| format!("Failed to read file: {}", file))?
-        }
-        MatchSubject::Diff(_) => {
-            let file = context.current_file.as_ref().ok_or_else(|| {
-                anyhow::anyhow!("'match diff' requires a current file (use inside foreach staged_files ...)")
-            })?;
-            githook_git::get_staged_file_content_from_index(file)
-                .with_context(|| format!("Failed to get diff for: {}", file))?
-        }
-    };
-
-    for arm in arms {
-        let matches = match &arm.pattern {
-            MatchPattern::Wildcard(pattern, _) => {
-                if matches!(subject, MatchSubject::File(_)) {
-                    match get_cached_glob(pattern) {
-                        Ok(glob_pattern) => glob_pattern.matches(&value_to_match),
-                        Err(e) => {
-                            eprintln!("Warning: Invalid glob pattern '{}': {}", pattern, e);
-                            false
-                        }
-                    }
-                } else {
-                    false
-                }
-            }
-            MatchPattern::Contains(text, _) => {
-                value_to_match.contains(text)
-            }
-            MatchPattern::Matches(regex_str, _) => {
-                let regex = regex::Regex::new(regex_str)
-                    .with_context(|| format!("Invalid regex: {}", regex_str))?;
-                regex.is_match(&value_to_match)
-            }
-            MatchPattern::GreaterThan(threshold, _) => {
-                if matches!(subject, MatchSubject::File(_)) {
-                    let metadata = std::fs::metadata(&value_to_match)?;
-                    (metadata.len() as f64) > *threshold
-                } else {
-                    false
-                }
-            }
-            MatchPattern::LessThan(threshold, _) => {
-                if matches!(subject, MatchSubject::File(_)) {
-                    let metadata = std::fs::metadata(&value_to_match)?;
-                    (metadata.len() as f64) < *threshold
-                } else {
-                    false
-                }
-            }
-        };
-
-        if matches {
-            for stmt in &arm.action {
-                if !execute_statement(stmt, context, hook_args)? {
-                    return Ok(false);
-                }
-            }
-            return Ok(true);
-        }
+impl Default for Executor {
+    fn default() -> Self {
+        Self::new()
     }
+}
 
-    Ok(true)
+// ============================================================================
+// EXECUTION RESULT
+// ============================================================================
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExecutionResult {
+    /// Continue execution
+    Continue,
+    
+    /// Block execution (block if triggered)
+    Blocked,
+    
+    /// Break from loop
+    Break,
+    
+    /// Continue to next loop iteration
+    ContinueLoop,
+}
+
+impl ExecutionResult {
+    pub fn should_stop(&self) -> bool {
+        matches!(self, ExecutionResult::Blocked)
+    }
+    
+    pub fn is_break(&self) -> bool {
+        matches!(self, ExecutionResult::Break)
+    }
+    
+    pub fn is_continue(&self) -> bool {
+        matches!(self, ExecutionResult::ContinueLoop)
+    }
 }

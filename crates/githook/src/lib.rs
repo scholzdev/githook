@@ -1,8 +1,9 @@
-pub use githook_syntax::{Statement, Token, tokenize_with_spans, parse_spanned, Diagnostic};
-pub use githook_eval::{execute, execute_with_filters, ExecutionStatus};
+// V2 API Re-exports
+pub use githook_syntax::{Statement, Token, tokenize, parse, Diagnostic, Expression};
+pub use githook_eval::{Executor, ExecutionResult, Value};
 pub use githook_git;
 
 pub mod prelude {
-    pub use crate::{parse_spanned, execute, execute_with_filters};
-    pub use crate::{Statement, Token, ExecutionStatus};
+    pub use crate::{parse, tokenize, Executor};
+    pub use crate::{Statement, Expression, Token, ExecutionResult, Value};
 }

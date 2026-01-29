@@ -43,10 +43,10 @@ pub fn get_hover(doc: &DocumentState, position: Position, current_uri: &str) -> 
             let macro_name = &macro_ref[colon_pos + 1..];
             
             info!("Namespaced macro: {}:{}", namespace, macro_name);
-            info!("Available imports: {:?}", doc.imports);
+            // TODO: Extract imports from AST
             
             // Find the import with this alias
-            for (alias, import_path) in &doc.imports {
+            for (alias, import_path) in &[] as &[(String, String)] {
                 if alias == namespace {
                     info!("Found import: {} -> {}", alias, import_path);
                     
@@ -87,7 +87,8 @@ pub fn get_hover(doc: &DocumentState, position: Position, current_uri: &str) -> 
         let macro_name = macro_ref;
         
         // Find the macro definition
-        for (name, _span, body) in &doc.macro_definitions {
+        // TODO: Extract macro definitions from AST
+        for (name, _span, body) in &[] as &[(String, githook_syntax::Span, Vec<githook_syntax::ast::Statement>)] {
             if name == macro_name {
                 // Format the macro body
                 let body_str = format_macro_body(body);
@@ -99,7 +100,7 @@ pub fn get_hover(doc: &DocumentState, position: Position, current_uri: &str) -> 
         }
         
         // If not found locally, just show it's a macro
-        if doc.macros.contains(&macro_name.to_string()) {
+        if false { // TODO: Extract macros from AST
             return Some(create_hover(&format!("**Macro:** `{}`\n\nUser-defined macro", macro_name)));
         }
     }
@@ -173,14 +174,14 @@ fn format_macro_body(body: &[githook_syntax::Statement]) -> String {
     let mut result = String::new();
     for stmt in body {
         let line = match stmt {
-            githook_syntax::Statement::Run(cmd, _) => format!("    run \"{}\"", cmd),
-            githook_syntax::Statement::Block(msg, _) => format!("    block \"{}\"", msg),
-            githook_syntax::Statement::ConditionalRule { severity, message, .. } => {
-                let action_str = match severity {
-                    githook_syntax::RuleSeverity::Block(_) => "block_if",
-                    githook_syntax::RuleSeverity::Warn(_) => "warn_if",
-                };
-                format!("    {} ... message \"{}\"", action_str, message.as_deref().unwrap_or(""))
+            githook_syntax::Statement::Run { command, .. } => format!("    run \"{}\"", command),
+            githook_syntax::Statement::Block { message, .. } => format!("    block \"{}\"", message),
+            githook_syntax::Statement::Warn { message, .. } => format!("    warn \"{}\"", message),
+            githook_syntax::Statement::BlockIf { message, .. } => {
+                format!("    block_if ... message \"{}\"", message.as_deref().unwrap_or(""))
+            }
+            githook_syntax::Statement::WarnIf { message, .. } => {
+                format!("    warn_if ... message \"{}\"", message.as_deref().unwrap_or(""))
             }
             githook_syntax::Statement::MacroCall { name, namespace, .. } => {
                 if let Some(ns) = namespace {

@@ -6,7 +6,8 @@ use std::collections::HashMap;
 pub fn get_code_lens(doc: &DocumentState, all_documents: &HashMap<String, DocumentState>, current_uri: &str) -> Vec<CodeLens> {
     let mut lenses = Vec::new();
     
-    for (name, span, _body) in &doc.macro_definitions {
+    // TODO: Extract macro definitions from AST
+    for (name, span, _body) in &[] as &[(String, githook_syntax::Span, Vec<githook_syntax::ast::Statement>)] {
         // Count local references in current document
         let local_count = doc.text.matches(&format!("@{}", name)).count();
         
@@ -20,7 +21,7 @@ pub fn get_code_lens(doc: &DocumentState, all_documents: &HashMap<String, Docume
             }
             
             // Check if this document imports the current file
-            for (namespace, import_uri) in &other_doc.imports {
+            for (namespace, import_uri) in &[] as &[(String, String)] {
                 if import_uri == current_uri {
                     // Count namespaced references like @namespace:macro_name
                     let pattern = format!("@{}:{}", namespace, name);

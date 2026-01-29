@@ -6,7 +6,8 @@ use crate::import_resolver::resolve_import_path;
 pub fn get_document_links(doc: &DocumentState, current_uri: &str) -> Vec<DocumentLink> {
     let mut links = Vec::new();
     
-    for (_, import_path) in &doc.imports {
+    // TODO: Extract imports from AST
+    for (_, import_path) in &[] as &[(String, String)] {
         // Find the import statement in the text
         let import_text = format!("\"{}\"", import_path);
         

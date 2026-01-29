@@ -188,5 +188,5 @@ pub async fn load_or_fetch_package(
 }
 
 pub fn get_default_repo_url(_namespace: &str) -> String {
-    "scholzdev/githook-packages".to_string()
+    "scholzdev/githooks-packages".to_string()
 }
