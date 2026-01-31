@@ -1,5 +1,6 @@
 use githook_macros::{callable_impl, docs};
 use std::{fmt, path::{Path, PathBuf}};
+use anyhow::Result;
 
 #[derive(Debug, Clone)]
 pub struct PathContext {
@@ -715,5 +716,73 @@ impl ArrayContext {
                 _ => None,
             })
             .sum()
+    }
+}
+
+// Add closure methods that work with executor
+impl ArrayContext {
+    pub fn filter(&self, executor: &crate::executor::Executor, param: &str, body: &githook_syntax::ast::Expression) -> Result<crate::value::Value> {
+        use crate::value::Value;
+        let mut result = Vec::new();
+        for item in &self.items {
+            let mut scoped_executor = executor.clone();
+            scoped_executor.set_variable(param.to_string(), item.clone());
+            let predicate_result = scoped_executor.eval_expression(body)?;
+            if predicate_result.is_truthy() {
+                result.push(item.clone());
+            }
+        }
+        Ok(Value::Array(result))
+    }
+    
+    pub fn map(&self, executor: &crate::executor::Executor, param: &str, body: &githook_syntax::ast::Expression) -> Result<crate::value::Value> {
+        use crate::value::Value;
+        let mut result = Vec::new();
+        for item in &self.items {
+            let mut scoped_executor = executor.clone();
+            scoped_executor.set_variable(param.to_string(), item.clone());
+            let mapped_value = scoped_executor.eval_expression(body)?;
+            result.push(mapped_value);
+        }
+        Ok(Value::Array(result))
+    }
+    
+    pub fn find(&self, executor: &crate::executor::Executor, param: &str, body: &githook_syntax::ast::Expression) -> Result<crate::value::Value> {
+        use crate::value::Value;
+        for item in &self.items {
+            let mut scoped_executor = executor.clone();
+            scoped_executor.set_variable(param.to_string(), item.clone());
+            let predicate_result = scoped_executor.eval_expression(body)?;
+            if predicate_result.is_truthy() {
+                return Ok(item.clone());
+            }
+        }
+        Ok(Value::Null)
+    }
+    
+    pub fn any(&self, executor: &crate::executor::Executor, param: &str, body: &githook_syntax::ast::Expression) -> Result<crate::value::Value> {
+        use crate::value::Value;
+        for item in &self.items {
+            let mut scoped_executor = executor.clone();
+            scoped_executor.set_variable(param.to_string(), item.clone());
+            let predicate_result = scoped_executor.eval_expression(body)?;
+            if predicate_result.is_truthy() {
+                return Ok(Value::Bool(true));
+            }
+        }
+        Ok(Value::Bool(false))
+    }
+    
+    pub fn all(&self, executor: &crate::executor::Executor, param: &str, body: &githook_syntax::ast::Expression) -> Result<crate::value::Value> {
+        use crate::value::Value;
+        for item in &self.items {
+            let mut scoped_executor = executor.clone();
+            scoped_executor.set_variable(param.to_string(), item.clone());
+            let predicate_result = scoped_executor.eval_expression(body)?;
+            if !predicate_result.is_truthy() {
+                return Ok(Value::Bool(false));
+            }
+        }
+        Ok(Value::Bool(true))
     }
 }

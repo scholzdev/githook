@@ -265,62 +265,14 @@ impl Executor {
     fn eval_closure_method(&self, obj: &Value, method: &str, param: &str, body: &Expression) -> Result<Value> {
         match obj {
             Value::Array(arr) => {
+                // Create ArrayContext to delegate to
+                let array_ctx = crate::contexts::ArrayContext::new(arr.clone());
                 match method {
-                    "filter" => {
-                        let mut result = Vec::new();
-                        for item in arr {
-                            let mut scoped_executor: Executor = (*self).clone();
-                            scoped_executor.set_variable(param.to_string(), item.clone());
-                            let predicate_result = scoped_executor.eval_expression(body)?;
-                            if predicate_result.is_truthy() {
-                                result.push(item.clone());
-                            }
-                        }
-                        Ok(Value::Array(result))
-                    }
-                    "map" => {
-                        let mut result = Vec::new();
-                        for item in arr {
-                            let mut scoped_executor: Executor = (*self).clone();
-                            scoped_executor.set_variable(param.to_string(), item.clone());
-                            let mapped_value = scoped_executor.eval_expression(body)?;
-                            result.push(mapped_value);
-                        }
-                        Ok(Value::Array(result))
-                    }
-                    "find" => {
-                        for item in arr {
-                            let mut scoped_executor: Executor = (*self).clone();
-                            scoped_executor.set_variable(param.to_string(), item.clone());
-                            let predicate_result = scoped_executor.eval_expression(body)?;
-                            if predicate_result.is_truthy() {
-                                return Ok(item.clone());
-                            }
-                        }
-                        Ok(Value::Null)
-                    }
-                    "any" => {
-                        for item in arr {
-                            let mut scoped_executor: Executor = (*self).clone();
-                            scoped_executor.set_variable(param.to_string(), item.clone());
-                            let predicate_result = scoped_executor.eval_expression(body)?;
-                            if predicate_result.is_truthy() {
-                                return Ok(Value::Bool(true));
-                            }
-                        }
-                        Ok(Value::Bool(false))
-                    }
-                    "all" => {
-                        for item in arr {
-                            let mut scoped_executor: Executor = (*self).clone();
-                            scoped_executor.set_variable(param.to_string(), item.clone());
-                            let predicate_result = scoped_executor.eval_expression(body)?;
-                            if !predicate_result.is_truthy() {
-                                return Ok(Value::Bool(false));
-                            }
-                        }
-                        Ok(Value::Bool(true))
-                    }
+                    "filter" => array_ctx.filter(self, param, body),
+                    "map" => array_ctx.map(self, param, body),
+                    "find" => array_ctx.find(self, param, body),
+                    "any" => array_ctx.any(self, param, body),
+                    "all" => array_ctx.all(self, param, body),
                     _ => bail!("Unknown closure method: {}", method),
                 }
             }
@@ -368,7 +320,9 @@ impl Executor {
                     },
                     Value::Object(obj) => {
                         // Try to get a reasonable string representation
-                        if let Some(name_prop) = obj.properties.get("name") {
+                        if let Some(path_ctx) = &obj.path_context {
+                            path_ctx.to_string()
+                        } else if let Some(name_prop) = obj.properties.get("name") {
                             if let Value::String(s) = name_prop {
                                 s.clone()
                             } else {
