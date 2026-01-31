@@ -11,6 +11,7 @@ use crate::diagnostics::publish_diagnostics;
 use crate::completion::get_completions;
 use crate::goto_definition::get_definition;
 use crate::hover::get_hover;
+use crate::inlay_hints::get_inlay_hints;
 use crate::symbols::get_document_symbols;
 use crate::references::find_references;
 use crate::rename::{prepare_rename, execute_rename};
@@ -35,7 +36,7 @@ impl GithookLanguageServer {
     }
 
     async fn update_document(&self, uri: Url, text: String) {
-        let state = DocumentState::new(text.clone(), Some(&uri.to_string()));
+        let state = DocumentState::new(text.clone(), Some(uri.as_ref()));
         
         // Parse and generate diagnostics
         let diagnostics = state.diagnostics().unwrap_or_default();
@@ -96,6 +97,7 @@ impl LanguageServer for GithookLanguageServer {
                     resolve_provider: Some(false),
                     work_done_progress_options: WorkDoneProgressOptions::default(),
                 }),
+                inlay_hint_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
         })
@@ -166,13 +168,12 @@ impl LanguageServer for GithookLanguageServer {
         let position = params.text_document_position_params.position;
         
         let documents = self.documents.read().await;
-        if let Some(doc) = documents.get(uri.as_str()) {
-            if let Some(location) = get_definition(doc, position, uri.as_str()) {
+        if let Some(doc) = documents.get(uri.as_str())
+            && let Some(location) = get_definition(doc, position, uri.as_str()) {
                 // Update the URI in case it's a cross-file definition
                 // (get_definition now returns the correct URI)
                 return Ok(Some(GotoDefinitionResponse::Scalar(location)));
             }
-        }
         
         Ok(None)
     }
@@ -215,11 +216,10 @@ impl LanguageServer for GithookLanguageServer {
         let position = params.position;
         
         let documents = self.documents.read().await;
-        if let Some(doc) = documents.get(&uri) {
-            if let Some(range) = prepare_rename(doc, position) {
+        if let Some(doc) = documents.get(&uri)
+            && let Some(range) = prepare_rename(doc, position) {
                 return Ok(Some(PrepareRenameResponse::Range(range)));
             }
-        }
         
         Ok(None)
     }
@@ -262,9 +262,9 @@ impl LanguageServer for GithookLanguageServer {
     }
     
     async fn code_lens_resolve(&self, mut code_lens: CodeLens) -> Result<CodeLens> {
-        if let Some(data) = &code_lens.data {
-            if let Ok(info) = serde_json::from_value::<serde_json::Value>(data.clone()) {
-                if let (Some(count), Some(_name)) = (info.get("refCount").and_then(|v| v.as_u64()), info.get("macroName").and_then(|v| v.as_str())) {
+        if let Some(data) = &code_lens.data
+            && let Ok(info) = serde_json::from_value::<serde_json::Value>(data.clone())
+                && let (Some(count), Some(_name)) = (info.get("refCount").and_then(|v| v.as_u64()), info.get("macroName").and_then(|v| v.as_str())) {
                     let message = if count == 1 {
                         "1 reference".to_string()
                     } else {
@@ -277,8 +277,6 @@ impl LanguageServer for GithookLanguageServer {
                         arguments: None,
                     });
                 }
-            }
-        }
         
         Ok(code_lens)
     }
@@ -302,6 +300,18 @@ impl LanguageServer for GithookLanguageServer {
         if let Some(doc) = documents.get(&uri) {
             let links = get_document_links(doc, &uri);
             return Ok(Some(links));
+        }
+        
+        Ok(None)
+    }
+    
+    async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
+        let uri = params.text_document.uri.to_string();
+        let documents = self.documents.read().await;
+        
+        if let Some(doc) = documents.get(&uri) {
+            let hints = get_inlay_hints(doc, params.range);
+            return Ok(Some(hints));
         }
         
         Ok(None)

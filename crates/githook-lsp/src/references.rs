@@ -30,9 +30,7 @@ pub fn find_references(doc: &DocumentState, position: Position, _include_declara
     let word = &line[word_start..word_end];
     
     // Check if it's a macro
-    if word.starts_with('@') {
-        let macro_ref = &word[1..];
-        
+    if let Some(macro_ref) = word.strip_prefix('@') {
         // Extract macro name (handle namespace:macro)
         let macro_name = if let Some(colon_pos) = macro_ref.find(':') {
             &macro_ref[colon_pos + 1..]

@@ -1,4 +1,6 @@
 mod updater;
+mod config;
+mod errors;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -8,6 +10,9 @@ use githook_syntax::{lexer, parser};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use config::Config;
+use errors::{enhance_error, EnhancedError};
 
 #[derive(Parser)]
 #[command(name = "githook")]
@@ -38,26 +43,75 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// List installed packages
     List,
+    /// Check for githook updates
     CheckUpdate,
+    /// Update githook to latest version
     Update,
+    /// Initialize githook in current repository
+    Init {
+        /// Create config file with defaults
+        #[arg(long)]
+        config: bool,
+    },
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    // Load config file (.githookrc)
+    let mut config = Config::load().unwrap_or_default();
+    
+    // Merge CLI arguments
+    let cache_opt = if cli.cache {
+        Some(true)
+    } else if cli.no_cache {
+        Some(false)
+    } else {
+        None
+    };
+    
+    config.merge_cli_args(
+        cache_opt,
+        false,
+        cli.only_groups.clone(),
+        cli.skip_groups.clone(),
+    );
 
     if let Some(command) = cli.command {
         return match command {
             Commands::List => list_packages(),
             Commands::CheckUpdate => updater::check_for_updates(),
             Commands::Update => updater::perform_update(),
+            Commands::Init { config: create_config } => {
+                if create_config {
+                    init_config()
+                } else {
+                    init_hooks()
+                }
+            }
         };
     }
 
     let hook_type = determine_hook_type(cli.hook_type, &cli.hook_args)?;
-    let config_path = find_config(&hook_type)?;
+    
+    let config_path = match find_config(&hook_type) {
+        Ok(path) => path,
+        Err(e) => {
+            let enhanced = enhance_error(e, None, None)
+                .with_suggestion(format!("Create a hook file: touch .githook/{}.ghook", hook_type))
+                .with_help("Hook files should be placed in .githook/ or .git/hooks/ directory");
+            enhanced.display();
+            std::process::exit(1);
+        }
+    };
 
-    println!("{} Running {}...", "-".cyan(), config_path.display());
+    if config.colored {
+        println!("{} {}", "→".cyan().bold(), format!("Running {}...", config_path.display()).bold());
+    } else {
+        println!("→ Running {}...", config_path.display());
+    }
 
     let source = fs::read_to_string(&config_path)
         .with_context(|| format!("Failed to read config from {:?}", config_path))?;
@@ -71,12 +125,12 @@ fn main() -> Result<()> {
         Ok(tokens) => tokens,
         Err(lex_error) => {
             let span = lex_error.span();
-            eprintln!("{} Lexer error: {}", "x".red(), lex_error);
-            eprintln!("\n{}", githook_syntax::error::format_error_with_source(
-                &format!("{}", lex_error),
-                &source,
-                span
-            ));
+            let enhanced = EnhancedError::new(format!("Syntax error: {}", lex_error))
+                .with_span(span)
+                .with_file(config_path.display().to_string())
+                .with_source(source.clone())
+                .with_help("Check for invalid characters or unclosed strings");
+            enhanced.display();
             std::process::exit(1);
         }
     };
@@ -85,11 +139,12 @@ fn main() -> Result<()> {
     let statements = match parser::parse(tokens) {
         Ok(stmts) => stmts,
         Err(parse_error) => {
-            eprintln!("{} Parser error: {}", "x".red(), parse_error);
-            eprintln!(
-                "\n{}: Make sure all blocks are properly closed with '{{' and '}}'\n",
-                "Tip".yellow().bold()
-            );
+            let enhanced = EnhancedError::new(format!("Parse error: {}", parse_error))
+                .with_file(config_path.display().to_string())
+                .with_source(source.clone())
+                .with_suggestion("Check that all blocks are properly closed with { and }")
+                .with_help("Common issues: missing closing brace, missing semicolon, typo in keyword");
+            enhanced.display();
             std::process::exit(1);
         }
     };
@@ -100,52 +155,62 @@ fn main() -> Result<()> {
     // 4. Execute with V2 executor
     let mut executor = Executor::new()
         .with_git_files(git_files);
-    executor.verbose = false; // Clean output
+    executor.verbose = config.verbose;
 
-    let result = executor.execute_statements(&statements)
-        .with_context(|| "Failed to execute hook")?;
+    let result = match executor.execute_statements(&statements) {
+        Ok(res) => res,
+        Err(e) => {
+            let enhanced = enhance_error(e, Some(config_path.display().to_string()), Some(source))
+                .with_help("Check variable names, function calls, and command syntax");
+            enhanced.display();
+            std::process::exit(1);
+        }
+    };
 
     // Print summary
     println!();
-    println!("{}", "=== Summary ===".cyan().bold());
+    println!("{}", "═══ Summary ═══".cyan().bold());
     
     if executor.tests_run == 0 && executor.blocks.is_empty() && executor.warnings.is_empty() {
-        println!("{}", "No checks performed (empty repository or no staged files)".dimmed());
+        println!("{}", "  No checks performed (empty repository or no staged files)".dimmed());
     }
     
     if !executor.warnings.is_empty() {
-        println!("{}", "Warnings:".yellow());
+        println!("\n{}", "⚠ Warnings:".yellow().bold());
         for warning in &executor.warnings {
-            println!("  ! {}", warning);
+            println!("  {} {}", "!".yellow().bold(), warning);
         }
-        println!();
     }
     
     if !executor.blocks.is_empty() {
-        println!("{}", "Blocked:".red());
+        println!("\n{}", "✗ Blocked:".red().bold());
         for block in &executor.blocks {
-            println!("  x {}", block);
+            println!("  {} {}", "✗".red().bold(), block);
         }
-        println!();
     }
     
+    println!();
     match result {
         ExecutionResult::Continue => {
             if executor.tests_run > 0 {
-                println!("{} Passed {} checks", "o".green(), executor.tests_run);
+                println!("{} {} {}", 
+                    "✓".green().bold(), 
+                    "Passed".green().bold(),
+                    format!("{} checks", executor.tests_run).dimmed()
+                );
             } else {
-                println!("{} No checks to run", "o".green());
+                println!("{} {}", "✓".green().bold(), "No checks to run".dimmed());
             }
             std::process::exit(0);
         }
         ExecutionResult::Blocked => {
-            println!("{} Hook blocked", "x".red());
+            println!("{} {}", "✗".red().bold(), "Hook blocked".red().bold());
             std::process::exit(1);
         }
         ExecutionResult::Break | ExecutionResult::ContinueLoop => {
-            // These should only occur inside loops and should be handled there
-            // If we reach here, it means break/continue was used outside a loop
-            println!("{} Error: break/continue used outside loop", "x".red());
+            let enhanced = EnhancedError::new("break/continue used outside loop")
+                .with_help("break and continue can only be used inside foreach loops");
+            enhanced.display();
             std::process::exit(1);
         }
     }
@@ -167,8 +232,8 @@ fn determine_hook_type(explicit_type: Option<String>, args: &[String]) -> Result
         }
     }
 
-    if let Ok(current_exe) = std::env::current_exe() {
-        if let Some(file_name) = current_exe.file_name() {
+    if let Ok(current_exe) = std::env::current_exe()
+        && let Some(file_name) = current_exe.file_name() {
             let name = file_name.to_string_lossy();
 
             if name.contains("pre-commit") {
@@ -181,7 +246,6 @@ fn determine_hook_type(explicit_type: Option<String>, args: &[String]) -> Result
                 return Ok("post-commit".to_string());
             }
         }
-    }
 
     Ok("pre-commit".to_string())
 }
@@ -360,5 +424,82 @@ fn get_git_files(hook_type: &str) -> Result<Vec<String>> {
 fn validate_config(_statements: &[githook_syntax::ast::Statement], _config_path: &Path) -> Result<()> {
     // V2: Simplified validation - parser already handles most errors
     // TODO: Add semantic validation for groups, etc.
+    Ok(())
+}
+
+fn init_config() -> Result<()> {
+    let config_path = PathBuf::from(".githookrc");
+    
+    if config_path.exists() {
+        println!("{} Config file already exists at {}", "✓".green().bold(), config_path.display());
+        return Ok(());
+    }
+    
+    let default_config = r#"# Githook Configuration
+# See https://github.com/yourusername/githook for more info
+
+# Enable colored output
+colored = true
+
+# Enable verbose output
+verbose = false
+
+# Enable package caching
+cache = true
+
+# Additional search paths for packages
+# search_paths = ["./custom-packages"]
+
+# Environment variables
+# [env]
+# NODE_ENV = "production"
+
+# Execution timeout in seconds
+# timeout = 30
+"#;
+    
+    fs::write(&config_path, default_config)
+        .with_context(|| format!("Failed to write config to {:?}", config_path))?;
+    
+    println!("{} Created config file: {}", "✓".green().bold(), config_path.display());
+    Ok(())
+}
+
+fn init_hooks() -> Result<()> {
+    let hooks_dir = PathBuf::from(".githook");
+    
+    if !hooks_dir.exists() {
+        fs::create_dir(&hooks_dir)
+            .with_context(|| format!("Failed to create directory {:?}", hooks_dir))?;
+        println!("{} Created directory: {}", "✓".green().bold(), hooks_dir.display());
+    }
+    
+    // Create example pre-commit hook
+    let pre_commit_path = hooks_dir.join("pre-commit.ghook");
+    if !pre_commit_path.exists() {
+        let example_hook = r#"# Example pre-commit hook
+# Runs on every commit
+
+group "format-check" {
+    on "**/*.rs" {
+        run "cargo fmt --check"
+    }
+}
+
+group "lint" {
+    on "**/*.rs" {
+        run "cargo clippy -- -D warnings"
+    }
+}
+"#;
+        fs::write(&pre_commit_path, example_hook)
+            .with_context(|| format!("Failed to write hook to {:?}", pre_commit_path))?;
+        println!("{} Created example hook: {}", "✓".green().bold(), pre_commit_path.display());
+    }
+    
+    println!("\n{} Githook initialized!", "✓".green().bold());
+    println!("  Edit {} to customize your hooks", pre_commit_path.display());
+    println!("  Run {} to create a config file", "githook init --config".cyan());
+    
     Ok(())
 }

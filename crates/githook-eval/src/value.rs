@@ -1,19 +1,18 @@
 use anyhow::{Result, bail};
-use std::collections::HashMap;
-
-// ============================================================================
-// VALUE SYSTEM V2 - Object-based unified system
-// ============================================================================
+use ahash::{HashMap, HashMapExt};
+use crate::contexts::{
+    StringContext, NumberContext, ArrayContext,
+    FileContext, PathContext,
+    GitContext, BranchInfo, CommitInfo, AuthorInfo, RemoteInfo, DiffStats
+};
 
 #[derive(Debug, Clone)]
 pub enum Value {
-    // Primitives
     String(String),
     Number(f64),
     Bool(bool),
     Null,
     
-    // Composite
     Array(Vec<Value>),
     Object(Object),
 }
@@ -22,8 +21,17 @@ pub enum Value {
 pub struct Object {
     pub type_name: String,
     pub properties: HashMap<String, Value>,
-    pub file_context: Option<githook_git::FileContext>,
-    pub path_context: Option<githook_git::PathContext>,
+    pub file_context: Option<FileContext>,
+    pub path_context: Option<PathContext>,
+    pub git_context: Option<GitContext>,
+    pub branch_context: Option<BranchInfo>,
+    pub commit_context: Option<CommitInfo>,
+    pub author_context: Option<AuthorInfo>,
+    pub remote_context: Option<RemoteInfo>,
+    pub stats_context: Option<DiffStats>,
+    pub string_context: Option<StringContext>,
+    pub number_context: Option<NumberContext>,
+    pub array_context: Option<ArrayContext>,
 }
 
 impl Object {
@@ -33,6 +41,15 @@ impl Object {
             properties: HashMap::new(),
             file_context: None,
             path_context: None,
+            git_context: None,
+            branch_context: None,
+            commit_context: None,
+            author_context: None,
+            remote_context: None,
+            stats_context: None,
+            string_context: None,
+            number_context: None,
+            array_context: None,
         }
     }
     
@@ -41,35 +58,76 @@ impl Object {
         self
     }
     
-    pub fn with_file_context(mut self, ctx: githook_git::FileContext) -> Self {
+    pub fn with_file_context(mut self, ctx: FileContext) -> Self {
         self.file_context = Some(ctx);
         self
     }
     
-    pub fn with_path_context(mut self, ctx: githook_git::PathContext) -> Self {
+    pub fn with_path_context(mut self, ctx: PathContext) -> Self {
         self.path_context = Some(ctx);
         self
     }
     
+    pub fn with_git_context(mut self, ctx: GitContext) -> Self {
+        self.git_context = Some(ctx);
+        self
+    }
+    
+    pub fn with_branch_context(mut self, ctx: BranchInfo) -> Self {
+        self.branch_context = Some(ctx);
+        self
+    }
+    
+    pub fn with_commit_context(mut self, ctx: CommitInfo) -> Self {
+        self.commit_context = Some(ctx);
+        self
+    }
+    
+    pub fn with_author_context(mut self, ctx: AuthorInfo) -> Self {
+        self.author_context = Some(ctx);
+        self
+    }
+    
+    pub fn with_remote_context(mut self, ctx: RemoteInfo) -> Self {
+        self.remote_context = Some(ctx);
+        self
+    }
+    
+    pub fn with_stats_context(mut self, ctx: DiffStats) -> Self {
+        self.stats_context = Some(ctx);
+        self
+    }
+    
+    pub fn with_string_context(mut self, ctx: StringContext) -> Self {
+        self.string_context = Some(ctx);
+        self
+    }
+    
+    pub fn with_number_context(mut self, ctx: NumberContext) -> Self {
+        self.number_context = Some(ctx);
+        self
+    }
+    
+    pub fn with_array_context(mut self, ctx: ArrayContext) -> Self {
+        self.array_context = Some(ctx);
+        self
+    }
+    
+    #[inline]
     pub fn get(&self, key: &str) -> Option<&Value> {
         self.properties.get(key)
     }
     
+    #[inline]
     pub fn set(&mut self, key: impl Into<String>, value: Value) {
         self.properties.insert(key.into(), value);
     }
 }
 
 impl Value {
-    // ========================================================================
-    // BUILTIN OBJECTS
-    // ========================================================================
-    
-    /// Creates the `env` object for accessing environment variables
     pub fn env_object() -> Self {
         let mut obj = Object::new("env");
         
-        // Add common environment variables
         if let Ok(val) = std::env::var("USER") {
             obj.set("USER", Value::String(val));
         }
@@ -89,34 +147,37 @@ impl Value {
         Value::Object(obj)
     }
     
-    // ========================================================================
-    // TYPE CHECKS
-    // ========================================================================
-    
+    #[inline]
     pub fn is_string(&self) -> bool {
         matches!(self, Value::String(_))
     }
     
+    #[inline]
     pub fn is_number(&self) -> bool {
         matches!(self, Value::Number(_))
     }
     
+    #[inline]
     pub fn is_bool(&self) -> bool {
         matches!(self, Value::Bool(_))
     }
     
+    #[inline]
     pub fn is_null(&self) -> bool {
         matches!(self, Value::Null)
     }
     
+    #[inline]
     pub fn is_array(&self) -> bool {
         matches!(self, Value::Array(_))
     }
     
+    #[inline]
     pub fn is_object(&self) -> bool {
         matches!(self, Value::Object(_))
     }
     
+    #[inline]
     pub fn is_truthy(&self) -> bool {
         match self {
             Value::Bool(b) => *b,
@@ -153,283 +214,116 @@ impl Value {
         }
     }
     
-    // ========================================================================
-    // PROPERTY ACCESS
-    // ========================================================================
-    
     pub fn get_property(&self, name: &str) -> Result<Value> {
         match self {
             Value::Object(obj) => {
-                // Try call_property() for File context first
-                if obj.type_name == "File" {
-                    if let Some(ctx) = &obj.file_context {
-                        if let Ok(value) = ctx.call_property(name) {
+                if obj.type_name == "File"
+                    && let Some(ctx) = &obj.file_context
+                        && let Ok(value) = ctx.call_property(name) {
                             return Ok(value);
                         }
-                    }
-                }
-                // Try call_property() for Path context
-                if obj.type_name == "Path" {
-                    if let Some(ctx) = &obj.path_context {
-                        if let Ok(value) = ctx.call_property(name) {
+                if obj.type_name == "Path"
+                    && let Some(ctx) = &obj.path_context
+                        && let Ok(value) = ctx.call_property(name) {
                             return Ok(value);
                         }
-                    }
-                }
-                // Fall back to map lookup
+                if obj.type_name == "Git"
+                    && let Some(ctx) = &obj.git_context
+                        && let Ok(value) = ctx.call_property(name) {
+                            return Ok(value);
+                        }
+                if obj.type_name == "Branch"
+                    && let Some(ctx) = &obj.branch_context
+                        && let Ok(value) = ctx.call_property(name) {
+                            return Ok(value);
+                        }
+                if obj.type_name == "Commit"
+                    && let Some(ctx) = &obj.commit_context
+                        && let Ok(value) = ctx.call_property(name) {
+                            return Ok(value);
+                        }
+                if obj.type_name == "Author"
+                    && let Some(ctx) = &obj.author_context
+                        && let Ok(value) = ctx.call_property(name) {
+                            return Ok(value);
+                        }
+                if obj.type_name == "Remote"
+                    && let Some(ctx) = &obj.remote_context
+                        && let Ok(value) = ctx.call_property(name) {
+                            return Ok(value);
+                        }
+                if obj.type_name == "Stats"
+                    && let Some(ctx) = &obj.stats_context
+                        && let Ok(value) = ctx.call_property(name) {
+                            return Ok(value);
+                        }
+                if obj.type_name == "String"
+                    && let Some(ctx) = &obj.string_context
+                        && let Ok(value) = ctx.call_property(name) {
+                            return Ok(value);
+                        }
+                if obj.type_name == "Number"
+                    && let Some(ctx) = &obj.number_context
+                        && let Ok(value) = ctx.call_property(name) {
+                            return Ok(value);
+                        }
+                if obj.type_name == "Array"
+                    && let Some(ctx) = &obj.array_context
+                        && let Ok(value) = ctx.call_property(name) {
+                            return Ok(value);
+                        }
                 obj.get(name)
                     .cloned()
                     .ok_or_else(|| anyhow::anyhow!("Property '{}' not found on {}", name, obj.type_name))
             }
-            Value::String(s) => self.get_string_property(s, name),
-            Value::Array(arr) => self.get_array_property(arr, name),
+            Value::String(s) => {
+                let ctx = StringContext::new(s.clone());
+                ctx.call_property(name)
+            }
+            Value::Number(n) => {
+                let ctx = NumberContext::new(*n);
+                ctx.call_property(name)
+            }
+            Value::Array(arr) => {
+                let ctx = ArrayContext::new(arr.clone());
+                ctx.call_property(name)
+            }
             _ => bail!("Cannot access property '{}' on {:?}", name, self),
         }
     }
-    
-    fn get_string_property(&self, s: &str, name: &str) -> Result<Value> {
-        match name {
-            "length" => Ok(Value::Number(s.len() as f64)),
-            "upper" => Ok(Value::String(s.to_uppercase())),
-            "lower" => Ok(Value::String(s.to_lowercase())),
-            _ => bail!("Unknown string property: {}", name),
-        }
-    }
-    
-    fn get_array_property(&self, arr: &[Value], name: &str) -> Result<Value> {
-        match name {
-            "length" => Ok(Value::Number(arr.len() as f64)),
-            _ => bail!("Unknown array property: {}", name),
-        }
-    }
-    
-    // ========================================================================
-    // METHOD CALLS
-    // ========================================================================
-    
+
+    #[allow(dead_code)]
     pub fn call_method(&self, name: &str, args: &[Value]) -> Result<Value> {
         match self {
-            Value::String(s) => self.call_string_method(s, name, args),
-            Value::Number(n) => self.call_number_method(*n, name, args),
-            Value::Array(arr) => self.call_array_method(arr, name, args),
+            Value::String(s) => {
+                let ctx = StringContext::new(s.clone());
+                let string_args: Result<Vec<&str>> = args.iter().map(|v| {
+                    v.as_string().map(|s| Box::leak(s.into_boxed_str()) as &str)
+                }).collect();
+                ctx.call_method(name, &string_args?)
+            }
+            Value::Number(n) => {
+                let ctx = NumberContext::new(*n);
+                let string_args: Result<Vec<&str>> = args.iter().map(|v| {
+                    v.as_string().map(|s| Box::leak(s.into_boxed_str()) as &str)
+                }).collect();
+                ctx.call_method(name, &string_args?)
+            }
+            Value::Array(arr) => {
+                let ctx = ArrayContext::new(arr.clone());
+                let string_args: Result<Vec<&str>> = args.iter().map(|v| {
+                    v.as_string().map(|s| Box::leak(s.into_boxed_str()) as &str)
+                }).collect();
+                ctx.call_method(name, &string_args?)
+            }
             Value::Object(obj) => self.call_object_method(obj, name, args),
             _ => bail!("Cannot call method '{}' on {:?}", name, self),
         }
     }
     
-    fn call_string_method(&self, s: &str, name: &str, args: &[Value]) -> Result<Value> {
-        match name {
-            "len" | "length" => {
-                if !args.is_empty() {
-                    bail!("length() expects no arguments, got {}", args.len());
-                }
-                Ok(Value::Number(s.len() as f64))
-            }
-            
-            "is_empty" => {
-                if !args.is_empty() {
-                    bail!("is_empty() expects no arguments, got {}", args.len());
-                }
-                Ok(Value::Bool(s.is_empty()))
-            }
-            
-            "to_lowercase" => {
-                if !args.is_empty() {
-                    bail!("to_lowercase() expects no arguments, got {}", args.len());
-                }
-                Ok(Value::String(s.to_lowercase()))
-            }
-            
-            "to_uppercase" => {
-                if !args.is_empty() {
-                    bail!("to_uppercase() expects no arguments, got {}", args.len());
-                }
-                Ok(Value::String(s.to_uppercase()))
-            }
-            
-            "trim" => {
-                if !args.is_empty() {
-                    bail!("trim() expects no arguments, got {}", args.len());
-                }
-                Ok(Value::String(s.trim().to_string()))
-            }
-            
-            "replace" => {
-                if args.len() != 2 {
-                    bail!("replace() expects 2 arguments (from, to), got {}", args.len());
-                }
-                let from = args[0].as_string()?;
-                let to = args[1].as_string()?;
-                Ok(Value::String(s.replace(&from, &to)))
-            }
-            
-            "contains" => {
-                if args.len() != 1 {
-                    bail!("contains() expects 1 argument, got {}", args.len());
-                }
-                let needle = args[0].as_string()?;
-                Ok(Value::Bool(s.contains(&needle)))
-            }
-            
-            "starts_with" => {
-                if args.len() != 1 {
-                    bail!("starts_with() expects 1 argument, got {}", args.len());
-                }
-                let prefix = args[0].as_string()?;
-                Ok(Value::Bool(s.starts_with(&prefix)))
-            }
-            
-            "ends_with" => {
-                if args.len() != 1 {
-                    bail!("ends_with() expects 1 argument, got {}", args.len());
-                }
-                let suffix = args[0].as_string()?;
-                Ok(Value::Bool(s.ends_with(&suffix)))
-            }
-            
-            "matches" => {
-                if args.len() != 1 {
-                    bail!("matches() expects 1 argument, got {}", args.len());
-                }
-                let pattern = args[0].as_string()?;
-                let regex = regex::Regex::new(&pattern)?;
-                Ok(Value::Bool(regex.is_match(s)))
-            }
-            
-            "split" => {
-                if args.len() != 1 {
-                    bail!("split() expects 1 argument, got {}", args.len());
-                }
-                let delimiter = args[0].as_string()?;
-                let parts: Vec<Value> = s.split(&delimiter)
-                    .map(|p| Value::String(p.to_string()))
-                    .collect();
-                Ok(Value::Array(parts))
-            }
-            
-            _ => bail!("Unknown string method: {}", name),
-        }
-    }
-    
-    fn call_number_method(&self, n: f64, name: &str, args: &[Value]) -> Result<Value> {
-        match name {
-            "abs" => {
-                if !args.is_empty() {
-                    bail!("abs() expects no arguments, got {}", args.len());
-                }
-                Ok(Value::Number(n.abs()))
-            }
-            
-            "floor" => {
-                if !args.is_empty() {
-                    bail!("floor() expects no arguments, got {}", args.len());
-                }
-                Ok(Value::Number(n.floor()))
-            }
-            
-            "ceil" => {
-                if !args.is_empty() {
-                    bail!("ceil() expects no arguments, got {}", args.len());
-                }
-                Ok(Value::Number(n.ceil()))
-            }
-            
-            "round" => {
-                if !args.is_empty() {
-                    bail!("round() expects no arguments, got {}", args.len());
-                }
-                Ok(Value::Number(n.round()))
-            }
-            
-            _ => bail!("Unknown number method: {}", name),
-        }
-    }
-    
-    fn call_array_method(&self, arr: &[Value], name: &str, _args: &[Value]) -> Result<Value> {
-        match name {
-            "first" => {
-                arr.first()
-                    .cloned()
-                    .ok_or_else(|| anyhow::anyhow!("Array is empty"))
-            }
-            
-            "last" => {
-                arr.last()
-                    .cloned()
-                    .ok_or_else(|| anyhow::anyhow!("Array is empty"))
-            }
-            
-            "len" | "length" => {
-                Ok(Value::Number(arr.len() as f64))
-            }
-            
-            "join" => {
-                let separator = _args.first()
-                    .map(|v| v.as_string())
-                    .transpose()?
-                    .unwrap_or_else(|| ", ".to_string());
-                
-                let strings: Vec<String> = arr.iter()
-                    .map(|v| v.display())
-                    .collect();
-                
-                Ok(Value::String(strings.join(&separator)))
-            }
-            
-            "reverse" => {
-                let mut reversed = arr.to_vec();
-                reversed.reverse();
-                Ok(Value::Array(reversed))
-            }
-            
-            "sort" => {
-                let mut sorted = arr.to_vec();
-                sorted.sort_by(|a, b| {
-                    match (a, b) {
-                        (Value::Number(x), Value::Number(y)) => {
-                            x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal)
-                        }
-                        (Value::String(x), Value::String(y)) => x.cmp(y),
-                        _ => std::cmp::Ordering::Equal,
-                    }
-                });
-                Ok(Value::Array(sorted))
-            }
-            
-            "filter" => {
-                // Handled by executor with closures
-                bail!("filter() requires a closure argument");
-            }
-            
-            "map" => {
-                // Handled by executor with closures
-                bail!("map() requires a closure argument");
-            }
-            
-            "find" => {
-                // Handled by executor with closures
-                bail!("find() requires a closure argument");
-            }
-            
-            "any" => {
-                // Handled by executor with closures
-                bail!("any() requires a closure argument");
-            }
-            
-            "all" => {
-                // Handled by executor with closures
-                bail!("all() requires a closure argument");
-            }
-            
-            _ => bail!("Unknown array method: {}", name),
-        }
-    }
-    
     fn call_object_method(&self, obj: &Object, name: &str, args: &[Value]) -> Result<Value> {
-        // File object methods
         if obj.type_name == "File" {
             if let Some(ctx) = &obj.file_context {
-                // Convert Value args to strings for the call
                 let string_args: Result<Vec<String>> = args.iter()
                     .map(|v| v.as_string())
                     .collect();
@@ -440,7 +334,6 @@ impl Value {
                 bail!("File object has no context")
             }
         } 
-        // Path object methods
         else if obj.type_name == "Path" {
             if let Some(ctx) = &obj.path_context {
                 // Convert Value args to strings for the call
@@ -459,10 +352,6 @@ impl Value {
         }
     }
     
-    // ========================================================================
-    // DISPLAY
-    // ========================================================================
-    
     pub fn display(&self) -> String {
         match self {
             Value::String(s) => s.clone(),
@@ -480,20 +369,14 @@ impl Value {
                 format!("[{}]", items.join(", "))
             }
             Value::Object(obj) => {
-                // Special handling for PathContext - use Display trait
                 if let Some(path_ctx) = &obj.path_context {
                     return path_ctx.to_string();
                 }
-                // Default object display
                 format!("{}{{ {} properties }}", obj.type_name, obj.properties.len())
             }
         }
     }
 }
-
-// ============================================================================
-// COMPARISON OPERATIONS
-// ============================================================================
 
 impl Value {
     pub fn equals(&self, other: &Value) -> Result<bool> {
@@ -535,15 +418,10 @@ impl Value {
     }
 }
 
-// ============================================================================
-// CONSTRUCTORS FOR COMMON OBJECTS
-// ============================================================================
-
 impl Value {
     pub fn file_object(path: String) -> Value {
-        let file_ctx = githook_git::FileContext::from_path(&path);
+        let file_ctx = FileContext::from_path(&path);
         
-        // Create Path object from FileContext's path
         let path_obj = Value::Object(
             Object::new("Path")
                 .with_path_context(file_ctx.path.clone())
@@ -557,17 +435,13 @@ impl Value {
     }
     
     pub fn path_object(path: String) -> Value {
-        let path_ctx = githook_git::PathContext::from_path(&path);
+        let path_ctx = PathContext::from_path(&path);
         Value::Object(
             Object::new("Path")
                 .with_path_context(path_ctx)
         )
     }
 }
-
-// ============================================================================
-// FROM IMPLEMENTATIONS
-// ============================================================================
 
 impl From<bool> for Value {
     fn from(b: bool) -> Self {
@@ -587,3 +461,8 @@ impl From<f64> for Value {
     }
 }
 
+impl From<Vec<String>> for Value {
+    fn from(arr: Vec<String>) -> Self {
+        Value::Array(arr.into_iter().map(Value::String).collect())
+    }
+}

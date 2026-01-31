@@ -20,7 +20,7 @@ fn collect_folding_ranges(stmt: &Statement, ranges: &mut Vec<FoldingRange>) {
             if !body.is_empty() {
                 // Find the end line by getting the max span from body
                 let end_line = body.iter()
-                    .filter_map(|s| get_statement_span(s))
+                    .filter_map(get_statement_span)
                     .map(|s| s.line)
                     .max()
                     .unwrap_or(span.line);
@@ -43,7 +43,7 @@ fn collect_folding_ranges(stmt: &Statement, ranges: &mut Vec<FoldingRange>) {
         Statement::If { span, then_body, else_body, .. } => {
             if !then_body.is_empty() {
                 let end_line = then_body.iter()
-                    .filter_map(|s| get_statement_span(s))
+                    .filter_map(get_statement_span)
                     .map(|s| s.line)
                     .max()
                     .unwrap_or(span.line);
@@ -71,7 +71,7 @@ fn collect_folding_ranges(stmt: &Statement, ranges: &mut Vec<FoldingRange>) {
         Statement::ForEach { body, span, .. } => {
             if !body.is_empty() {
                 let end_line = body.iter()
-                    .filter_map(|s| get_statement_span(s))
+                    .filter_map(get_statement_span)
                     .map(|s| s.line)
                     .max()
                     .unwrap_or(span.line);

@@ -1,9 +1,15 @@
 use anyhow::{Result, bail, Context as _};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;  // Faster than ahash for small string keys
 use std::process::Command;
+use rayon::prelude::*;
 
 use crate::value::{Value, Object};
+use crate::contexts::GitContext;
 use githook_syntax::ast::{Statement, Expression, BinaryOp, UnaryOp, MatchPattern};
+
+// Use FxHashMap for string-keyed maps (identifiers, variable names)
+type VariableMap = FxHashMap<String, Value>;
+type MacroMap = FxHashMap<String, (Vec<String>, Vec<Statement>)>;
 
 // ============================================================================
 // EXECUTOR V2 - Expression evaluation and statement execution
@@ -11,8 +17,8 @@ use githook_syntax::ast::{Statement, Expression, BinaryOp, UnaryOp, MatchPattern
 
 #[derive(Clone)]
 pub struct Executor {
-    /// Global variables (let bindings)
-    pub variables: HashMap<String, Value>,
+    /// Global variables (let bindings) - using FxHashMap for identifier lookups
+    pub variables: VariableMap,
     
     /// Git context (injected)
     git_files: Vec<String>,
@@ -29,20 +35,24 @@ pub struct Executor {
     /// Test counter
     pub tests_run: usize,
     
-    /// Macro definitions (name -> (params, body))
-    macros: HashMap<String, (Vec<String>, Vec<Statement>)>,
+    /// Macro definitions (name -> (params, body)) - FxHashMap for macro name lookups
+    macros: MacroMap,
+    
+    /// Namespaced macro definitions (namespace::name -> (params, body))
+    namespaced_macros: MacroMap,
 }
 
 impl Executor {
     pub fn new() -> Self {
         Self {
-            variables: HashMap::new(),
+            variables: FxHashMap::default(),
             git_files: Vec::new(),
             verbose: false,
             warnings: Vec::new(),
             blocks: Vec::new(),
             tests_run: 0,
-            macros: HashMap::new(),
+            macros: FxHashMap::default(),
+            namespaced_macros: FxHashMap::default(),
         }
     }
     
@@ -88,11 +98,10 @@ impl Executor {
                 let obj_value = self.eval_expression(receiver)?;
                 
                 // Special handling for methods that accept closures
-                if matches!(method.as_str(), "filter" | "map" | "find" | "any" | "all") && args.len() == 1 {
-                    if let Expression::Closure { param, body, .. } = &args[0] {
+                if matches!(method.as_str(), "filter" | "map" | "find" | "any" | "all") && args.len() == 1
+                    && let Expression::Closure { param, body, .. } = &args[0] {
                         return self.eval_closure_method(&obj_value, method, param, body);
                     }
-                }
                 
                 // Regular method call with evaluated arguments
                 let arg_values: Result<Vec<Value>> = args.iter()
@@ -113,10 +122,12 @@ impl Executor {
             }
             
             Expression::Array(elements, _) => {
-                let values: Result<Vec<Value>> = elements.iter()
-                    .map(|e| self.eval_expression(e))
-                    .collect();
-                Ok(Value::Array(values?))
+                // Pre-allocate capacity for better performance
+                let mut values = Vec::with_capacity(elements.len());
+                for e in elements {
+                    values.push(self.eval_expression(e)?);
+                }
+                Ok(Value::Array(values))
             }
             
             Expression::InterpolatedString { parts, span: _ } => {
@@ -340,6 +351,38 @@ impl Executor {
                 Ok(ExecutionResult::Continue)
             }
             
+            Statement::Print { message, span: _ } => {
+                // Evaluate the expression and convert to string
+                let value = self.eval_expression(message)?;
+                let text = match value {
+                    Value::String(s) => s,
+                    Value::Number(n) => n.to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Array(arr) => {
+                        let strings: Vec<String> = arr.iter().map(|v| match v {
+                            Value::String(s) => s.clone(),
+                            other => format!("{:?}", other),
+                        }).collect();
+                        strings.join(", ")
+                    },
+                    Value::Object(obj) => {
+                        // Try to get a reasonable string representation
+                        if let Some(name_prop) = obj.properties.get("name") {
+                            if let Value::String(s) = name_prop {
+                                s.clone()
+                            } else {
+                                format!("{}({})", obj.type_name, obj.properties.len())
+                            }
+                        } else {
+                            format!("{}({})", obj.type_name, obj.properties.len())
+                        }
+                    },
+                };
+                println!("{}", text);
+                Ok(ExecutionResult::Continue)
+            }
+            
             Statement::Block { message, span: _ } => {
                 // Block means "stop and show message" - like a hard block
                 self.blocks.push(message.clone());
@@ -360,11 +403,35 @@ impl Executor {
             }
             
             Statement::Parallel { commands, span: _ } => {
-                // TODO: Implement parallel execution
-                // For now, sequential
-                for cmd in commands {
-                    self.run_command(cmd)?;
+                // Parallel execution using rayon - interpolate strings first
+                let interpolated: Result<Vec<String>> = commands.iter()
+                    .map(|cmd| self.interpolate_string(cmd))
+                    .collect();
+                let interpolated = interpolated?;
+                
+                // Run commands in parallel
+                let results: Vec<Result<()>> = interpolated.par_iter()
+                    .map(|cmd| {
+                        let output = Command::new("sh")
+                            .arg("-c")
+                            .arg(cmd)
+                            .output()
+                            .with_context(|| format!("Failed to execute: {}", cmd))?;
+                        
+                        if !output.status.success() {
+                            bail!("Command failed: {}\nstderr: {}", 
+                                  cmd, 
+                                  String::from_utf8_lossy(&output.stderr));
+                        }
+                        Ok(())
+                    })
+                    .collect();
+                
+                // Check for errors
+                for result in results {
+                    result?;
                 }
+                self.tests_run += commands.len();
                 Ok(ExecutionResult::Continue)
             }
             
@@ -382,9 +449,9 @@ impl Executor {
                 Ok(ExecutionResult::ContinueLoop)
             }
             
-            Statement::ForEach { collection, var, where_clause: _, body, span: _ } => {
+            Statement::ForEach { collection, var, pattern, body, span: _ } => {
                 let coll_value = self.eval_expression(collection)?;
-                self.execute_foreach(&coll_value, var, body)
+                self.execute_foreach(&coll_value, var, pattern.as_deref(), body)
             }
             
             Statement::If { condition, then_body, else_body, span: _ } => {
@@ -442,20 +509,25 @@ impl Executor {
             }
             
             Statement::MacroDef { name, params, body, span: _ } => {
-                // Store macro definition
-                self.macros.insert(name.clone(), (params.clone(), body.clone()));
+                // Store macro definition (convert SmallVec to Vec)
+                self.macros.insert(name.clone(), (params.to_vec(), body.clone()));
                 Ok(ExecutionResult::Continue)
             }
             
             Statement::MacroCall { namespace, name, args, span: _ } => {
                 // Lookup macro
-                if namespace.is_some() {
-                    bail!("Namespaced macros not yet supported: {:?}::{}", namespace, name);
-                }
-                
-                let (params, body) = self.macros.get(name)
-                    .cloned()
-                    .ok_or_else(|| anyhow::anyhow!("Macro '{}' not defined", name))?;
+                let (params, body) = if let Some(ns) = namespace {
+                    // Namespaced macro call: @namespace:macro_name
+                    let full_name = format!("{}::{}", ns, name);
+                    self.namespaced_macros.get(&full_name)
+                        .cloned()
+                        .ok_or_else(|| anyhow::anyhow!("Macro '{}::{}' not defined. Did you import the package '@{}/{}'?", ns, name, "preview", ns))?
+                } else {
+                    // Local macro call: @macro_name
+                    self.macros.get(name)
+                        .cloned()
+                        .ok_or_else(|| anyhow::anyhow!("Macro '{}' not defined", name))?
+                };
                 
                 // Check parameter count
                 if params.len() != args.len() {
@@ -476,9 +548,7 @@ impl Executor {
                 
                 // Restore variables (but keep any new bindings from macro)
                 for (key, value) in saved_vars {
-                    if !self.variables.contains_key(&key) {
-                        self.variables.insert(key, value);
-                    }
+                    self.variables.entry(key).or_insert(value);
                 }
                 
                 result
@@ -548,14 +618,31 @@ impl Executor {
                 let statements = githook_syntax::parser::parse(tokens)
                     .with_context(|| format!("Failed to parse package: {}", package))?;
                 
-                // Execute package statements
-                if let Some(alias_name) = alias {
-                    if self.verbose {
-                        println!("Using package '{}' as '{}'", package, alias_name);
+                // Execute package statements and register macros in namespace
+                let namespace_key = alias.as_ref().unwrap_or(&name.to_string()).clone();
+                
+                // Save current macros
+                let saved_local_macros = self.macros.clone();
+                
+                // Execute package (macros will be added to self.macros)
+                self.execute_statements(&statements)?;
+                
+                // Move all newly defined macros to namespaced_macros
+                for (macro_name, macro_def) in &self.macros {
+                    if !saved_local_macros.contains_key(macro_name) {
+                        let full_name = format!("{}::{}", namespace_key, macro_name);
+                        self.namespaced_macros.insert(full_name, macro_def.clone());
                     }
                 }
                 
-                self.execute_statements(&statements)
+                // Restore local macros (remove package macros from local scope)
+                self.macros = saved_local_macros;
+                
+                if self.verbose {
+                    println!("✓ Package '{}' loaded into namespace '{}'", package, namespace_key);
+                }
+                
+                Ok(ExecutionResult::Continue)
             }
             
             Statement::Group { name, severity, enabled, body, span: _ } => {
@@ -600,15 +687,15 @@ impl Executor {
         }
     }
     
-    fn execute_foreach(&mut self, collection: &Value, var_name: &str, body: &[Statement]) -> Result<ExecutionResult> {
+    fn execute_foreach(&mut self, collection: &Value, var_name: &str, pattern: Option<&str>, body: &[Statement]) -> Result<ExecutionResult> {
         let items = match collection {
-            Value::Array(arr) => arr.clone(),
+            Value::Array(arr) => arr,
             Value::Object(obj) if obj.type_name == "Git" => {
                 // git.all_files
                 if let Some(Value::Array(files)) = obj.get("all_files") {
-                    files.clone()
+                    files
                 } else {
-                    Vec::new()
+                    return Ok(ExecutionResult::Continue);
                 }
             }
             _ => bail!("Cannot iterate over {:?}", collection),
@@ -617,11 +704,33 @@ impl Executor {
         // Track if collection was empty
         if items.is_empty() {
             self.tests_run += 1; // Count foreach as 1 check even if empty
+            return Ok(ExecutionResult::Continue);
         }
         
         for item in items {
+            // Apply pattern filter if specified
+            if let Some(pattern_str) = pattern {
+                // Get the file name from the item
+                let item_name = if let Value::Object(_obj) = item {
+                    // Use get_property() to access File context properties
+                    match item.get_property("name") {
+                        Ok(Value::String(name)) => name,
+                        _ => continue, // Skip if no name property or not a string
+                    }
+                } else if let Value::String(s) = item {
+                    s.clone()
+                } else {
+                    continue; // Skip if not an object or string
+                };
+                
+                // Check if item matches pattern (wildcard matching)
+                if !Self::matches_pattern(&item_name, pattern_str) {
+                    continue; // Skip this item
+                }
+            }
+            
             // Set loop variable
-            let old_value = self.variables.insert(var_name.to_string(), item);
+            let old_value = self.variables.insert(var_name.to_string(), item.clone());
             
             // Execute body - this will increment tests_run for each check
             let result = self.execute_statements(body)?;
@@ -705,7 +814,7 @@ impl Executor {
                 // Extract expression until '}'
                 let mut expr_str = String::new();
                 let mut depth = 1;
-                while let Some(ch) = chars.next() {
+                for ch in chars.by_ref() {
                     if ch == '{' {
                         depth += 1;
                         expr_str.push(ch);
@@ -764,10 +873,12 @@ impl Executor {
     }
     
     fn create_git_object(&self) -> Value {
-        let mut git = Object::new("Git");
-        
         // Get git context from githook-git crate
-        let git_context = githook_git::GitContext::new();
+        let git_context = GitContext::new();
+        
+        // Create Git object with context
+        let mut git = Object::new("Git")
+            .with_git_context(git_context.clone());
         
         // all_files array
         let all_files: Vec<Value> = git_context.all_files.iter()
@@ -781,47 +892,64 @@ impl Executor {
             .collect();
         git.set("staged_files", Value::Array(staged_files));
         
-        // branch object
-        let mut branch = Object::new("Branch");
-        branch.set("name", Value::String(git_context.branch.name));
+        // branch object with context
+        let branch = Object::new("Branch")
+            .with_branch_context(git_context.branch.clone());
         git.set("branch", Value::Object(branch));
         
         // commit object (null if no commit exists)
-        let commit_value = if let Some(commit_info) = git_context.commit {
-            let mut commit = Object::new("Commit");
-            commit.set("message", Value::String(commit_info.message));
-            commit.set("hash", Value::String(commit_info.hash));
+        let commit_value = if let Some(commit_info) = git_context.commit.clone() {
+            let commit = Object::new("Commit")
+                .with_commit_context(commit_info);
             Value::Object(commit)
         } else {
             Value::Null
         };
         git.set("commit", commit_value);
         
-        // author object
-        let mut author = Object::new("Author");
-        author.set("name", Value::String(git_context.author.name));
-        author.set("email", Value::String(git_context.author.email));
+        // author object with context
+        let author = Object::new("Author")
+            .with_author_context(git_context.author.clone());
         git.set("author", Value::Object(author));
         
-        // remote object
-        let mut remote = Object::new("Remote");
-        remote.set("name", Value::String(git_context.remote.name));
-        remote.set("url", Value::String(git_context.remote.url));
+        // remote object with context
+        let remote = Object::new("Remote")
+            .with_remote_context(git_context.remote.clone());
         git.set("remote", Value::Object(remote));
         
-        // stats object
-        let mut stats = Object::new("Stats");
-        stats.set("files_changed", Value::Number(git_context.stats.files_changed as f64));
-        stats.set("additions", Value::Number(git_context.stats.additions as f64));
-        stats.set("deletions", Value::Number(git_context.stats.deletions as f64));
-        stats.set("modified_lines", Value::Number((git_context.stats.additions + git_context.stats.deletions) as f64));
+        // stats object with context
+        let stats = Object::new("Stats")
+            .with_stats_context(git_context.stats.clone());
         git.set("stats", Value::Object(stats));
         
-        // boolean flags
-        git.set("is_merge_commit", Value::Bool(git_context.is_merge_commit));
-        git.set("has_conflicts", Value::Bool(git_context.has_conflicts));
-        
         Value::Object(git)
+    }
+    
+    /// Simple wildcard pattern matching
+    /// Supports: *.ext, prefix*, *suffix, *middle*, exact_match
+    fn matches_pattern(text: &str, pattern: &str) -> bool {
+        if pattern == "*" {
+            return true; // Match everything
+        }
+        
+        if pattern.starts_with('*') && pattern.ends_with('*') {
+            // *middle* - contains
+            let middle = &pattern[1..pattern.len()-1];
+            return text.contains(middle);
+        }
+        
+        if let Some(suffix) = pattern.strip_prefix('*') {
+            // *suffix - ends with
+            return text.ends_with(suffix);
+        }
+        
+        if let Some(prefix) = pattern.strip_suffix('*') {
+            // prefix* - starts with
+            return text.starts_with(prefix);
+        }
+        
+        // Exact match
+        text == pattern
     }
 }
 

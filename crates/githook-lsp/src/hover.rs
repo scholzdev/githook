@@ -1,6 +1,7 @@
 use tower_lsp::lsp_types::*;
 use crate::document::DocumentState;
 use crate::import_resolver::{resolve_import_path, load_imported_macros};
+use crate::docs::{get_property_doc, get_method_doc};
 use tracing::info;
 
 /// Get hover information for the symbol at the given position
@@ -19,30 +20,86 @@ pub fn get_hover(doc: &DocumentState, position: Position, current_uri: &str) -> 
         return None;
     }
     
-    // Find word boundaries - include @ and : for macros
-    let word_start = line[..char_idx].rfind(|c: char| !c.is_alphanumeric() && c != '_' && c != '@' && c != ':')
-        .map(|p| p + 1)
-        .unwrap_or(0);
+    // Find word boundaries - include @ and . for macros and property chains
+    // Exclude quotes, parentheses, and other non-identifier characters
+    let word_start = line[..char_idx].rfind(|c: char| {
+        !c.is_alphanumeric() && c != '_' && c != '@' && c != '.' && c != '(' && c != ')'
+    }).map(|p| p + 1).unwrap_or(0);
     
-    let word_end = char_idx + line[char_idx..].find(|c: char| !c.is_alphanumeric() && c != '_' && c != ':')
-        .unwrap_or(line[char_idx..].len());
+    let word_end = char_idx + line[char_idx..].find(|c: char| {
+        !c.is_alphanumeric() && c != '_' && c != '.' && c != '(' && c != ')'
+    }).unwrap_or(line[char_idx..].len());
     
-    let word = &line[word_start..word_end];
+    let word = &line[word_start..word_end].trim_start_matches(['"', '\'', '.']);
     
     info!("Hover word: '{}' at position {}:{}", word, position.line, position.character);
     
-    // Check for macro call
-    if word.starts_with('@') {
-        let macro_ref = &word[1..];
+    // Check for method call on variable (e.g., b.upper(), text.reverse())
+    if word.contains('.') {
+        // Extract method name after last dot
+        if let Some(last_dot) = word.rfind('.') {
+            let method_part = &word[last_dot + 1..];
+            let method_name = method_part.trim_end_matches("()");
+            
+            // Try method docs first
+            if let Some(content) = get_method_hover(method_name) {
+                return Some(Hover {
+                    contents: HoverContents::Markup(MarkupContent {
+                        kind: MarkupKind::Markdown,
+                        value: content,
+                    }),
+                    range: None,
+                });
+            }
+            
+            // Try property docs (some things like "upper" are properties)
+            if let Some(content) = get_property_hover(method_name) {
+                return Some(Hover {
+                    contents: HoverContents::Markup(MarkupContent {
+                        kind: MarkupKind::Markdown,
+                        value: content,
+                    }),
+                    range: None,
+                });
+            }
+        }
         
+        // Also try property chain (e.g., git.branch.name)
+        if let Some(content) = get_property_chain_hover(word) {
+            return Some(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: content,
+                }),
+                range: None,
+            });
+        }
+    }
+    
+    // Check for method name without dots (e.g., reverse, upper, lower)
+    if !word.contains('.') && !word.starts_with('@') {
+        let method_name = word.trim_end_matches("()");
+        if let Some(content) = get_method_hover(method_name) {
+            return Some(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: content,
+                }),
+                range: None,
+            });
+        }
+    }
+    
+    // Check for macro call
+    if let Some(macro_ref) = word.strip_prefix('@') {
         info!("Hover on macro: {}", macro_ref);
         
-        // Check if namespaced macro (namespace:macro_name)
-        if let Some(colon_pos) = macro_ref.find(':') {
-            let namespace = &macro_ref[..colon_pos];
-            let macro_name = &macro_ref[colon_pos + 1..];
+        // Check if namespaced macro (namespace.macro_name)
+        if let Some(dot_pos) = macro_ref.find('.') {
+            let namespace = &macro_ref[..dot_pos];
+            let macro_name = &macro_ref[dot_pos + 1..];
             
-            info!("Namespaced macro: {}:{}", namespace, macro_name);
+            info!("Namespaced macro: {}.{}", namespace, macro_name);
             // TODO: Extract imports from AST
             
             // Find the import with this alias
@@ -196,4 +253,46 @@ fn format_macro_body(body: &[githook_syntax::Statement]) -> String {
         result.push('\n');
     }
     result
+}
+
+/// Get hover info for a method name
+fn get_method_hover(method: &str) -> Option<String> {
+    // Use docs from generated JSON
+    if let Some(doc) = get_method_doc(method) {
+        return Some(format!(
+            "**{}**\n\n{}\n\n**Example:**\n```githook\n{}\n```",
+            doc.name,
+            doc.description,
+            doc.example
+        ));
+    }
+    None
+}
+
+/// Get hover info for a property name (like "upper", "lower" which are properties not methods)
+fn get_property_hover(name: &str) -> Option<String> {
+    // Use docs from generated JSON
+    if let Some(doc) = get_property_doc(name) {
+        return Some(format!(
+            "**{}**\n\n{}\n\n**Example:**\n```githook\n{}\n```",
+            doc.name,
+            doc.description,
+            doc.example
+        ));
+    }
+    None
+}
+
+/// Get hover info for property chain
+fn get_property_chain_hover(word: &str) -> Option<String> {
+    // Use docs from generated JSON
+    if let Some(doc) = get_property_doc(word) {
+        return Some(format!(
+            "**{}**\n\n{}\n\n**Example:**\n```githook\n{}\n```",
+            doc.name,
+            doc.description,
+            doc.example
+        ));
+    }
+    None
 }

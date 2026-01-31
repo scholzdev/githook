@@ -1,14 +1,8 @@
 use std::fmt;
 
-// ============================================================================
-// ERROR FORMATTING WITH SOURCE CONTEXT
-// ============================================================================
-
-/// Format an error with source code context
 pub fn format_error_with_source(error_msg: &str, source: &str, span: Span) -> String {
     let lines: Vec<&str> = source.lines().collect();
     
-    // Get the line containing the error (1-indexed to 0-indexed)
     let line_idx = if span.line > 0 { span.line - 1 } else { 0 };
     
     if line_idx >= lines.len() {
@@ -18,23 +12,18 @@ pub fn format_error_with_source(error_msg: &str, source: &str, span: Span) -> St
     let error_line = lines[line_idx];
     let line_num = span.line;
     
-    // Build the formatted error with context
     let mut output = String::new();
     output.push_str(&format!("  --> line {}:{}\n", line_num, span.col));
     output.push_str("   |\n");
     
-    // Show context: previous line if available
     if line_idx > 0 {
         output.push_str(&format!(" {} | {}\n", line_num - 1, lines[line_idx - 1]));
     }
     
-    // Show error line with line number
     output.push_str(&format!(" {} | {}\n", line_num, error_line));
     
-    // Show caret pointing to error position
     output.push_str(&format!("   | {}^ {}\n", " ".repeat(span.col.saturating_sub(1)), error_msg));
     
-    // Show next line if available
     if line_idx + 1 < lines.len() {
         output.push_str(&format!(" {} | {}\n", line_num + 1, lines[line_idx + 1]));
     }
@@ -43,10 +32,6 @@ pub fn format_error_with_source(error_msg: &str, source: &str, span: Span) -> St
     
     output
 }
-
-// ============================================================================
-// SPAN
-// ============================================================================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Span {

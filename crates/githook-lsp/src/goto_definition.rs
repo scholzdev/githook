@@ -33,15 +33,15 @@ pub fn get_definition(doc: &DocumentState, position: Position, current_uri: &str
     let word = &line[word_start..word_end];
     
     // Check if it's a macro call (starts with @)
-    if word.starts_with('@') {
-        let macro_ref = &word[1..]; // Remove @
+    if let Some(macro_ref) = word.strip_prefix('@') {
+        // Remove @
         
-        // Check if it's a namespaced macro call (namespace:macro_name)
-        if let Some(colon_pos) = macro_ref.find(':') {
-            let namespace = &macro_ref[..colon_pos];
-            let macro_name = &macro_ref[colon_pos + 1..];
+        // Check if it's a namespaced macro call (namespace.macro_name) - using dot notation
+        if let Some(dot_pos) = macro_ref.find('.') {
+            let namespace = &macro_ref[..dot_pos];
+            let macro_name = &macro_ref[dot_pos + 1..];
             
-            info!("Looking for namespaced macro: {}:{}", namespace, macro_name);
+            info!("Looking for namespaced macro: {}.{}", namespace, macro_name);
             // TODO: Extract imports from AST
             
             // Find the import with this alias

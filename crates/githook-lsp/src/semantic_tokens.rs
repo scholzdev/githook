@@ -90,55 +90,53 @@ fn collect_comments_raw(text: &str, tokens: &mut Vec<RawToken>) {
                     comment_start_line = line_idx;
                     comment_start_col = col;
                 }
-            } else {
-                if col + 1 < chars.len() && chars[col] == '*' && chars[col + 1] == '/' {
-                    // End of multi-line comment
-                    let end_col = col + 2;
-                    if comment_start_line == line_idx {
-                        // Single line
-                        let length = end_col - comment_start_col;
-                        tokens.push(RawToken {
-                            line: line_idx as u32,
-                            start: comment_start_col as u32,
-                            length: length as u32,
-                            token_type: 8,
-                            modifiers: 0,
-                        });
-                    } else {
-                        // Multi-line: emit token for each line
-                        for l in comment_start_line..=line_idx {
-                            if l == comment_start_line {
-                                let line_text = text.lines().nth(l).unwrap_or("");
-                                let length = line_text.len() - comment_start_col;
-                                tokens.push(RawToken {
-                                    line: l as u32,
-                                    start: comment_start_col as u32,
-                                    length: length as u32,
-                                    token_type: 8,
-                                    modifiers: 0,
-                                });
-                            } else if l == line_idx {
-                                tokens.push(RawToken {
-                                    line: l as u32,
-                                    start: 0,
-                                    length: end_col as u32,
-                                    token_type: 8,
-                                    modifiers: 0,
-                                });
-                            } else {
-                                let line_len = text.lines().nth(l).map(|s| s.len()).unwrap_or(0);
-                                tokens.push(RawToken {
-                                    line: l as u32,
-                                    start: 0,
-                                    length: line_len as u32,
-                                    token_type: 8,
-                                    modifiers: 0,
-                                });
-                            }
+            } else if col + 1 < chars.len() && chars[col] == '*' && chars[col + 1] == '/' {
+                // End of multi-line comment
+                let end_col = col + 2;
+                if comment_start_line == line_idx {
+                    // Single line
+                    let length = end_col - comment_start_col;
+                    tokens.push(RawToken {
+                        line: line_idx as u32,
+                        start: comment_start_col as u32,
+                        length: length as u32,
+                        token_type: 8,
+                        modifiers: 0,
+                    });
+                } else {
+                    // Multi-line: emit token for each line
+                    for l in comment_start_line..=line_idx {
+                        if l == comment_start_line {
+                            let line_text = text.lines().nth(l).unwrap_or("");
+                            let length = line_text.len() - comment_start_col;
+                            tokens.push(RawToken {
+                                line: l as u32,
+                                start: comment_start_col as u32,
+                                length: length as u32,
+                                token_type: 8,
+                                modifiers: 0,
+                            });
+                        } else if l == line_idx {
+                            tokens.push(RawToken {
+                                line: l as u32,
+                                start: 0,
+                                length: end_col as u32,
+                                token_type: 8,
+                                modifiers: 0,
+                            });
+                        } else {
+                            let line_len = text.lines().nth(l).map(|s| s.len()).unwrap_or(0);
+                            tokens.push(RawToken {
+                                line: l as u32,
+                                start: 0,
+                                length: line_len as u32,
+                                token_type: 8,
+                                modifiers: 0,
+                            });
                         }
                     }
-                    in_comment = false;
                 }
+                in_comment = false;
             }
             col += 1;
         }

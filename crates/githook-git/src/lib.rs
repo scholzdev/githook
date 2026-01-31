@@ -6,8 +6,12 @@ use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use lru::LruCache;
 
-pub mod file;
-pub use file::{FileContext, PathContext};
+#[derive(Debug, Default, Clone)]
+pub struct DiffStats {
+    pub files_changed: usize,
+    pub additions: usize,
+    pub deletions: usize,
+}
 
 static GLOB_REGEX_CACHE: OnceLock<Mutex<HashMap<String, Regex>>> = OnceLock::new();
 
@@ -24,102 +28,6 @@ fn get_commit_msg_cache() -> &'static Mutex<LruCache<String, String>> {
     COMMIT_MSG_CACHE.get_or_init(|| {
         Mutex::new(LruCache::new(NonZeroUsize::new(100).expect("Valid cache size")))
     })
-}
-
-// ============================================================================
-// GIT CONTEXT - Complete git information for hooks
-// ============================================================================
-
-#[derive(Debug, Clone)]
-pub struct GitContext {
-    pub branch: BranchInfo,
-    pub commit: Option<CommitInfo>,
-    pub author: AuthorInfo,
-    pub remote: RemoteInfo,
-    pub stats: DiffStats,
-    pub staged_files: Vec<String>,
-    pub all_files: Vec<String>,
-    pub is_merge_commit: bool,
-    pub has_conflicts: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct BranchInfo {
-    pub name: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct CommitInfo {
-    pub message: String,
-    pub hash: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct AuthorInfo {
-    pub name: String,
-    pub email: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct RemoteInfo {
-    pub name: String,
-    pub url: String,
-}
-
-impl GitContext {
-    /// Create a new GitContext with current repository state
-    pub fn new() -> Self {
-        let branch = BranchInfo {
-            name: get_branch_name().unwrap_or_else(|_| "unknown".to_string()),
-        };
-        
-        let commit = if let Ok(message) = get_commit_message() {
-            if let Ok(hash) = get_current_commit_hash() {
-                Some(CommitInfo { message, hash })
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        
-        let author = AuthorInfo {
-            name: get_author_name().unwrap_or_else(|_| String::new()),
-            email: get_author_email().unwrap_or_else(|_| String::new()),
-        };
-        
-        let remote = RemoteInfo {
-            name: "origin".to_string(),
-            url: get_remote_url().unwrap_or_else(|_| String::new()),
-        };
-        
-        let stats = get_diff_stats().unwrap_or_default();
-        
-        let staged_files = get_staged_files("*").unwrap_or_default();
-        let all_files = get_all_files("*").unwrap_or_default();
-        
-        let is_merge_commit = is_merge_commit().unwrap_or(false);
-        let has_conflicts = has_merge_conflicts().unwrap_or(false);
-        
-        Self { 
-            branch, 
-            commit,
-            author,
-            remote,
-            stats,
-            staged_files,
-            all_files,
-            is_merge_commit,
-            has_conflicts,
-        }
-    }
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct DiffStats {
-    pub files_changed: usize,
-    pub additions: usize,
-    pub deletions: usize,
 }
 
 #[derive(Debug)]
@@ -259,7 +167,6 @@ pub fn is_file_staged(pattern: &str) -> Result<bool> {
 }
 
 pub fn get_modified_files(pattern: &str) -> Result<Vec<String>> {
-    // Get both staged and unstaged modified files
     let output = git_capture(&["diff", "--name-only", "--diff-filter=M", "HEAD"])?;
     
     let files: Vec<String> = output
@@ -293,7 +200,6 @@ pub fn get_modified_files(pattern: &str) -> Result<Vec<String>> {
 }
 
 pub fn get_changed_files(pattern: &str) -> Result<Vec<String>> {
-    // Get only changed files (modified, not added)
     let output = git_capture(&["diff", "--cached", "--name-only", "--diff-filter=M"])?;
     
     let files: Vec<String> = output
@@ -436,7 +342,7 @@ pub fn get_added_lines_array() -> Result<Vec<String>> {
     let added_lines: Vec<String> = output
         .lines()
         .filter(|line| line.starts_with('+') && !line.starts_with("+++"))
-        .map(|line| line[1..].to_string()) // Remove leading '+'
+        .map(|line| line[1..].to_string())
         .collect();
     
     Ok(added_lines)
@@ -448,7 +354,7 @@ pub fn get_removed_lines_array() -> Result<Vec<String>> {
     let removed_lines: Vec<String> = output
         .lines()
         .filter(|line| line.starts_with('-') && !line.starts_with("---"))
-        .map(|line| line[1..].to_string()) // Remove leading '-'
+        .map(|line| line[1..].to_string()) 
         .collect();
     
     Ok(removed_lines)
@@ -571,11 +477,9 @@ pub fn get_commits_ahead(remote_branch: &str) -> Result<usize> {
 }
 
 pub fn get_unpushed_commits() -> Result<Vec<String>> {
-    // Get commits that haven't been pushed to origin/HEAD
     let output = match git_capture(&["log", "@{u}..", "--oneline"]) {
         Ok(out) => out,
         Err(_) => {
-            // No upstream configured, return empty
             return Ok(Vec::new());
         }
     };

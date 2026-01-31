@@ -1,22 +1,21 @@
 use crate::error::Span;
+use smallvec::SmallVec;
 
-// ============================================================================
-// EXPRESSIONS - Unified expression system
-// ============================================================================
+type PropertyChain = SmallVec<[String; 4]>;
+type MacroParams = SmallVec<[String; 4]>;
+type ParallelCommands = SmallVec<[String; 4]>;
 
 #[derive(Debug, Clone)]
 pub enum Expression {
-    // Literals
     String(String, Span),
     Number(f64, Span),
     Bool(bool, Span),
     Null(Span),
     
-    // Identifiers and property access
     Identifier(String, Span),
     
     PropertyAccess {
-        chain: Vec<String>,  // ["git", "branch", "name"]
+        chain: PropertyChain,
         span: Span,
     },
     
@@ -27,7 +26,6 @@ pub enum Expression {
         span: Span,
     },
     
-    // Binary operations
     Binary {
         left: Box<Expression>,
         op: BinaryOp,
@@ -35,24 +33,20 @@ pub enum Expression {
         span: Span,
     },
     
-    // Unary operations
     Unary {
         op: UnaryOp,
         expr: Box<Expression>,
         span: Span,
     },
     
-    // Array literal
     Array(Vec<Expression>, Span),
     
-    // Closure/Lambda
     Closure {
         param: String,
         body: Box<Expression>,
         span: Span,
     },
     
-    // String interpolation (for future processing)
     InterpolatedString {
         parts: Vec<StringPart>,
         span: Span,
@@ -67,41 +61,36 @@ pub enum StringPart {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BinaryOp {
-    // Comparison
-    Eq,        // ==
-    Ne,        // !=
-    Lt,        // <
-    Le,        // <=
-    Gt,        // >
-    Ge,        // >=
-    
-    // Logical
-    And,       // and
-    Or,        // or
-    
-    // Arithmetic
-    Add,       // +
-    Sub,       // -
-    Mul,       // *
-    Div,       // /
-    Mod,       // %
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    And,
+    Or,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum UnaryOp {
-    Not,       // not
-    Minus,     // - (unary minus)
+    Not,
+    Minus,
 }
-
-// ============================================================================
-// STATEMENTS
-// ============================================================================
 
 #[derive(Debug, Clone)]
 pub enum Statement {
-    // Commands
     Run {
-        command: String,  // Still string for now, can contain ${...}
+        command: String,
+        span: Span,
+    },
+    
+    Print {
+        message: Expression,
         span: Span,
     },
     
@@ -116,7 +105,7 @@ pub enum Statement {
     },
     
     Parallel {
-        commands: Vec<String>,
+        commands: ParallelCommands,
         span: Span,
     },
     
@@ -125,23 +114,20 @@ pub enum Statement {
         span: Span,
     },
     
-    // Variables
     Let {
         name: String,
         value: LetValue,
         span: Span,
     },
     
-    // UNIFIED FOREACH
     ForEach {
         collection: Expression,
         var: String,
-        where_clause: Option<Expression>,  // Optional filter
+        pattern: Option<String>,
         body: Vec<Statement>,
         span: Span,
     },
     
-    // Conditional - Block form
     If {
         condition: Expression,
         then_body: Vec<Statement>,
@@ -149,7 +135,6 @@ pub enum Statement {
         span: Span,
     },
     
-    // Control flow
     Break {
         span: Span,
     },
@@ -158,7 +143,6 @@ pub enum Statement {
         span: Span,
     },
     
-    // Conditional - Short form
     BlockIf {
         condition: Expression,
         message: Option<String>,
@@ -173,17 +157,15 @@ pub enum Statement {
         span: Span,
     },
     
-    // Match
     Match {
         subject: Expression,
         arms: Vec<MatchArm>,
         span: Span,
     },
     
-    // Macros
     MacroDef {
         name: String,
-        params: Vec<String>,
+        params: MacroParams,
         body: Vec<Statement>,
         span: Span,
     },
@@ -195,7 +177,6 @@ pub enum Statement {
         span: Span,
     },
     
-    // Imports
     Import {
         path: String,
         alias: Option<String>,
@@ -208,7 +189,6 @@ pub enum Statement {
         span: Span,
     },
     
-    // Group
     Group {
         name: String,
         severity: Option<Severity>,
@@ -217,7 +197,6 @@ pub enum Statement {
         span: Span,
     },
     
-    // Error handling
     Try {
         body: Vec<Statement>,
         catch_var: Option<String>,
@@ -226,16 +205,12 @@ pub enum Statement {
     },
 }
 
-// ============================================================================
-// SUPPORTING TYPES
-// ============================================================================
-
 #[derive(Debug, Clone)]
 pub enum LetValue {
     String(String),
     Number(f64),
-    Array(Vec<String>),  // For now, only string arrays
-    Expression(Expression),  // Future: any expression
+    Array(Vec<String>),
+    Expression(Expression),
 }
 
 #[derive(Debug, Clone)]
@@ -247,14 +222,9 @@ pub struct MatchArm {
 
 #[derive(Debug, Clone)]
 pub enum MatchPattern {
-    // For file matching
-    Wildcard(String, Span),    // "*.rs"
-    
-    // For content/value matching
-    Expression(Expression, Span),  // any expression as pattern
-    
-    // Catch-all
-    Underscore(Span),          // _
+    Wildcard(String, Span),
+    Expression(Expression, Span),
+    Underscore(Span),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -263,10 +233,6 @@ pub enum Severity {
     Warning,
     Info,
 }
-
-// ============================================================================
-// HELPER METHODS
-// ============================================================================
 
 impl Expression {
     pub fn span(&self) -> &Span {
@@ -301,6 +267,7 @@ impl Statement {
     pub fn span(&self) -> &Span {
         match self {
             Statement::Run { span, .. } => span,
+            Statement::Print { span, .. } => span,
             Statement::Block { span, .. } => span,
             Statement::Warn { span, .. } => span,
             Statement::Parallel { span, .. } => span,

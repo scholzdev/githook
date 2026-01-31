@@ -1,17 +1,85 @@
 use tower_lsp::lsp_types::*;
 use crate::document::DocumentState;
+use githook_syntax::ast::{Statement, LetValue, Expression};
 
 pub fn get_completions(doc: &DocumentState, position: Position) -> Vec<CompletionItem> {
     let mut completions = Vec::new();
     
     if let Some(context) = get_context(doc, position) {
         match context {
-            GithookCompletionContext::MacroCall => {
-                // TODO: Extract macros from AST
+            GithookCompletionContext::MacroCall(namespace) => {
+                // Extract macros from AST
+                if let Some(ast) = &doc.ast {
+                    for stmt in ast {
+                        if let githook_syntax::ast::Statement::MacroDef { name, params, .. } = stmt {
+                            let params_str = if params.is_empty() {
+                                String::new()
+                            } else {
+                                format!("({})", params.join(", "))
+                            };
+                            
+                            completions.push(CompletionItem {
+                                label: name.clone(),
+                                kind: Some(CompletionItemKind::FUNCTION),
+                                detail: Some(format!("macro{}", params_str)),
+                                insert_text: Some(name.clone()),
+                                ..Default::default()
+                            });
+                        }
+                    }
+                }
+                
+                // Add known package namespaces if completing after @
+                if namespace.is_none() {
+                    for (pkg, desc) in &[
+                        ("git", "Git utilities package"),
+                        ("preview/git", "Preview git package"),
+                    ] {
+                        completions.push(CompletionItem {
+                            label: pkg.to_string(),
+                            kind: Some(CompletionItemKind::MODULE),
+                            detail: Some(desc.to_string()),
+                            ..Default::default()
+                        });
+                    }
+                }
+                
                 return completions;
             }
             GithookCompletionContext::PropertyAccess(prefix) => {
                 return get_property_completions(&prefix);
+            }
+            GithookCompletionContext::ImportPath => {
+                // Suggest local .ghook files
+                completions.push(CompletionItem {
+                    label: "./helpers.ghook".to_string(),
+                    kind: Some(CompletionItemKind::FILE),
+                    detail: Some("Import local file".to_string()),
+                    ..Default::default()
+                });
+                completions.push(CompletionItem {
+                    label: "./macros.ghook".to_string(),
+                    kind: Some(CompletionItemKind::FILE),
+                    detail: Some("Import local file".to_string()),
+                    ..Default::default()
+                });
+                return completions;
+            }
+            GithookCompletionContext::UsePath => {
+                // Suggest known packages
+                for (pkg, desc) in &[
+                    ("@preview/git", "Git utilities package"),
+                    ("@preview/security", "Security checks package"),
+                    ("@preview/quality", "Code quality package"),
+                ] {
+                    completions.push(CompletionItem {
+                        label: pkg.to_string(),
+                        kind: Some(CompletionItemKind::MODULE),
+                        detail: Some(desc.to_string()),
+                        ..Default::default()
+                    });
+                }
+                return completions;
             }
             GithookCompletionContext::Normal => {}
         }
@@ -23,11 +91,17 @@ pub fn get_completions(doc: &DocumentState, position: Position) -> Vec<Completio
         ("warn", "Show warning"),
         ("if", "Conditional"),
         ("else", "Alternative"),
-        ("foreach", "Loop"),
+        ("foreach", "Loop over collection"),
         ("break", "Exit loop"),
         ("continue", "Next iteration"),
-        ("let", "Variable"),
-        ("match", "Pattern match"),
+        ("let", "Variable declaration"),
+        ("match", "Pattern matching"),
+        ("macro", "Define macro"),
+        ("import", "Import local file"),
+        ("use", "Use remote package"),
+        ("print", "Print message"),
+        ("parallel", "Run commands in parallel"),
+        ("allow", "Allow specific command"),
     ] {
         completions.push(CompletionItem {
             label: label.to_string(),
@@ -51,8 +125,74 @@ pub fn get_completions(doc: &DocumentState, position: Position) -> Vec<Completio
 #[derive(Debug, PartialEq)]
 enum GithookCompletionContext {
     Normal,
-    MacroCall,
+    MacroCall(Option<String>), // Optional namespace for @namespace.
     PropertyAccess(String),
+    ImportPath,  // After import "
+    UsePath,     // After use "@
+}
+
+/// Infer the type of a local variable by scanning Let statements before the cursor
+fn infer_variable_type(doc: &DocumentState, var_name: &str, _current_line: usize) -> Option<String> {
+    let ast = doc.ast.as_ref()?;
+    
+    // Scan all statements before current line
+    for stmt in ast {
+        if let Statement::Let { name, value, .. } = stmt
+            && name == var_name {
+                // Found the variable declaration, infer its type
+                return infer_let_value_type(value);
+            }
+    }
+    
+    None
+}
+
+/// Infer the type from a LetValue
+fn infer_let_value_type(value: &LetValue) -> Option<String> {
+    match value {
+        LetValue::String(_) => Some("string".to_string()),
+        LetValue::Number(_) => Some("number".to_string()),
+        LetValue::Array(_) => Some("array".to_string()),
+        LetValue::Expression(expr) => infer_expression_type(expr),
+    }
+}
+
+/// Infer the type from an Expression
+fn infer_expression_type(expr: &Expression) -> Option<String> {
+    match expr {
+        Expression::String(_, _) => Some("string".to_string()),
+        Expression::Number(_, _) => Some("number".to_string()),
+        Expression::Bool(_, _) => Some("bool".to_string()),
+        Expression::Array(_, _) => Some("array".to_string()),
+        Expression::PropertyAccess { chain, .. } => {
+            // Try to infer the final type from a property chain
+            // For example: git.branch.name -> String
+            infer_property_chain_type(chain)
+        }
+        Expression::MethodCall { method, .. } => {
+            // Try to infer the return type of a method call
+            infer_method_return_type(method)
+        }
+        _ => None,
+    }
+}
+
+/// Infer the type of a property access chain (e.g., git.branch.name)
+fn infer_property_chain_type(_chain: &[String]) -> Option<String> {
+    // Simple heuristic: many properties return strings
+    // This could be more sophisticated by tracking known property types
+    Some("string".to_string())
+}
+
+/// Infer the return type of a method call
+fn infer_method_return_type(method: &str) -> Option<String> {
+    match method {
+        "upper" | "lower" | "trim" | "reverse" | "replace" => Some("string".to_string()),
+        "split" | "lines" => Some("array".to_string()),
+        "len" | "count" => Some("number".to_string()),
+        "contains" | "starts_with" | "ends_with" => Some("bool".to_string()),
+        _ => None,
+    }
 }
 
 fn get_context(doc: &DocumentState, position: Position) -> Option<GithookCompletionContext> {
@@ -74,6 +214,14 @@ fn get_context(doc: &DocumentState, position: Position) -> Option<GithookComplet
     
     if let Some(dot_pos) = before_cursor.rfind('.') {
         let before_dot = &before_cursor[..dot_pos];
+        
+        // Check if the thing before the dot is a string literal
+        if before_dot.trim_end().ends_with('"') || before_dot.trim_end().ends_with('}') {
+            // It's a string literal or interpolation, return string methods
+            return Some(GithookCompletionContext::PropertyAccess("string".to_string()));
+        }
+        
+        // Find the identifier before the dot
         let ident_start = before_dot.rfind(|c: char| {
             c.is_whitespace() || "({[,=!<>".contains(c)
         }).map(|pos| pos + 1).unwrap_or(0);
@@ -81,12 +229,34 @@ fn get_context(doc: &DocumentState, position: Position) -> Option<GithookComplet
         let prefix = before_dot[ident_start..].trim();
         
         if !prefix.is_empty() {
+            // Check if it's a local variable with known type
+            if let Some(var_type) = infer_variable_type(doc, prefix, line_idx) {
+                return Some(GithookCompletionContext::PropertyAccess(var_type));
+            }
+            
             return Some(GithookCompletionContext::PropertyAccess(prefix.to_string()));
         }
     }
     
-    if before_cursor.trim_end().ends_with('@') {
-        return Some(GithookCompletionContext::MacroCall);
+    // Check for macro call: @macro or @namespace.
+    if let Some(at_pos) = before_cursor.rfind('@') {
+        let after_at = &before_cursor[at_pos + 1..];
+        if let Some(dot_pos) = after_at.find('.') {
+            let namespace = &after_at[..dot_pos];
+            return Some(GithookCompletionContext::MacroCall(Some(namespace.to_string())));
+        } else if after_at.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '/' || c == '-') {
+            return Some(GithookCompletionContext::MacroCall(None));
+        }
+    }
+    
+    // Check for import path: import "
+    if before_cursor.contains("import") && before_cursor.trim_end().ends_with('"') {
+        return Some(GithookCompletionContext::ImportPath);
+    }
+    
+    // Check for use path: use "@
+    if before_cursor.contains("use") && before_cursor.contains("\"@") {
+        return Some(GithookCompletionContext::UsePath);
     }
     
     Some(GithookCompletionContext::Normal)
@@ -97,47 +267,88 @@ fn get_property_completions(prefix: &str) -> Vec<CompletionItem> {
     
     let properties: &[(&str, &str)] = match prefix {
         "git" => &[
-            ("staged_files", "Staged files array"),
-            ("all_files", "All files array"),
-            ("branch", "Branch object"),
-            ("commit", "Commit object"),
-            ("author", "Author object"),
-            ("remote", "Remote object"),
-            ("stats", "Stats object"),
-            ("is_merge_commit", "Boolean"),
-            ("has_conflicts", "Boolean"),
+            ("staged_files", "Array<File> - Staged files"),
+            ("all_files", "Array<File> - All files"),
+            ("branch", "BranchInfo - Current branch"),
+            ("commit", "CommitInfo - Commit info"),
+            ("author", "AuthorInfo - Author details"),
+            ("remote", "RemoteInfo - Remote repository"),
+            ("stats", "DiffStats - Diff statistics"),
+            ("is_merge_commit", "bool - Is merge commit"),
+            ("has_conflicts", "bool - Has conflicts"),
         ],
-        "git.branch" | "branch" => &[("name", "Branch name")],
-        "git.commit" | "commit" => &[("message", "Commit message"), ("hash", "Commit hash")],
-        "git.author" | "author" => &[("name", "Author name"), ("email", "Author email")],
-        "git.remote" | "remote" => &[("name", "Remote name"), ("url", "Remote URL")],
+        "git.branch" | "branch" => &[
+            ("name", "String - Branch name"),
+            ("is_main", "bool - Is main/master branch"),
+        ],
+        "git.commit" | "commit" => &[
+            ("message", "String - Commit message"),
+            ("hash", "String - Commit SHA hash"),
+        ],
+        "git.author" | "author" => &[
+            ("name", "String - Author name"),
+            ("email", "String - Author email"),
+        ],
+        "git.remote" | "remote" => &[
+            ("name", "String - Remote name (e.g. origin)"),
+            ("url", "String - Remote URL"),
+        ],
         "git.stats" | "stats" => &[
-            ("files_changed", "Files changed"),
-            ("additions", "Lines added"),
-            ("deletions", "Lines deleted"),
-            ("modified_lines", "Total modified"),
+            ("files_changed", "Number - Files changed count"),
+            ("additions", "Number - Lines added"),
+            ("deletions", "Number - Lines deleted"),
+            ("modified_lines", "Number - Total lines modified"),
         ],
         p if p.starts_with("f") || p.starts_with("file") => &[
-            ("name", "Filename"),
-            ("path", "Path object"),
-            ("basename", "Base name"),
-            ("extension", "Extension"),
-            ("dirname", "Directory"),
-            ("size", "File size"),
-            ("exists()", "Check exists"),
-            ("contains(pattern)", "Contains text"),
-            ("starts_with(prefix)", "Starts with"),
-            ("ends_with(suffix)", "Ends with"),
+            ("name", "String - Filename"),
+            ("path", "PathContext - Path object"),
+            ("basename", "String - Base name without extension"),
+            ("extension", "String - File extension"),
+            ("dirname", "String - Directory path"),
+            ("size", "Number - File size in bytes"),
+            ("exists()", "bool - Check if file exists"),
+            ("is_file()", "bool - Is regular file"),
+            ("is_dir()", "bool - Is directory"),
+            ("is_readable()", "bool - Is readable"),
+            ("is_executable()", "bool - Is executable"),
+            ("is_symlink()", "bool - Is symbolic link"),
+            ("is_absolute()", "bool - Is absolute path"),
+            ("is_relative()", "bool - Is relative path"),
+            ("is_hidden()", "bool - Is hidden file"),
+            ("modified_time()", "Number - Last modified timestamp"),
+            ("created_time()", "Number - Creation timestamp"),
+            ("permissions()", "Number - File permissions"),
+            ("contains(pattern)", "bool - Contains text pattern"),
+            ("starts_with(prefix)", "bool - Path starts with"),
+            ("ends_with(suffix)", "bool - Path ends with"),
         ],
         p if p.ends_with(".path") || p == "path" => &[
-            ("string", "Path as string"),
-            ("basename", "Base name"),
-            ("extension", "Extension"),
-            ("parent", "Parent directory"),
-            ("filename", "Filename"),
-            ("join(suffix)", "Join path"),
+            ("string", "String - Path as string"),
+            ("basename", "String - Base name"),
+            ("extension", "String - Extension"),
+            ("parent", "String - Parent directory"),
+            ("filename", "String - Filename"),
+            ("join(suffix)", "String - Join path segments"),
         ],
-        _ => &[],
+        // String literal detection - when prefix is "string" return string methods
+        "string" => {
+            return get_string_method_completions();
+        },
+        _ => {
+            // Check if it's a string variable/property
+            if prefix.contains("name") || prefix.contains("message") || prefix.contains("email") || prefix.contains("url") {
+                return get_string_method_completions();
+            }
+            // Check if it's a number
+            if prefix.contains("size") || prefix.contains("count") || prefix.contains("length") {
+                return get_number_method_completions();
+            }
+            // Check if it's an array
+            if prefix.contains("files") || prefix.contains("array") {
+                return get_array_method_completions();
+            }
+            &[]
+        },
     };
     
     for (name, detail) in properties {
@@ -154,4 +365,217 @@ fn get_property_completions(prefix: &str) -> Vec<CompletionItem> {
     }
     
     completions
+}
+
+fn get_string_method_completions() -> Vec<CompletionItem> {
+    vec![
+        CompletionItem {
+            label: "length".to_string(),
+            kind: Some(CompletionItemKind::PROPERTY),
+            detail: Some("Number - String length".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "upper()".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("String - Convert to uppercase".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "lower()".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("String - Convert to lowercase".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "trim()".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("String - Remove whitespace".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "reverse()".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("String - Reverse string".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "split(delimiter)".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("Array<String> - Split by delimiter".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "replace(from, to)".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("String - Replace substring".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "contains(needle)".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("bool - Check if contains".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "starts_with(prefix)".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("bool - Check if starts with".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "ends_with(suffix)".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("bool - Check if ends with".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "matches(pattern)".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("bool - Regex match".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "lines()".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("Array<String> - Split into lines".to_string()),
+            ..Default::default()
+        },
+    ]
+}
+
+fn get_number_method_completions() -> Vec<CompletionItem> {
+    vec![
+        CompletionItem {
+            label: "abs()".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("Number - Absolute value".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "floor()".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("Number - Round down".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "ceil()".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("Number - Round up".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "round()".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("Number - Round to nearest".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "sqrt()".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("Number - Square root".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "pow(exponent)".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("Number - Power of".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "sin()".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("Number - Sine".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "cos()".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("Number - Cosine".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "tan()".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("Number - Tangent".to_string()),
+            ..Default::default()
+        },
+    ]
+}
+
+fn get_array_method_completions() -> Vec<CompletionItem> {
+    vec![
+        CompletionItem {
+            label: "length".to_string(),
+            kind: Some(CompletionItemKind::PROPERTY),
+            detail: Some("Number - Array length".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "sum()".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("Number - Sum of all numbers".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "filter(fn)".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("Array - Filter with closure".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "map(fn)".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("Array - Transform with closure".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "find(fn)".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("Any - Find first match".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "any(fn)".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("bool - Check if any match".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "all(fn)".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("bool - Check if all match".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "first()".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("Any - First element".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "last()".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("Any - Last element".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "reverse()".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("Array - Reversed array".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "sort()".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("Array - Sorted array".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "join(separator)".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("String - Join with separator".to_string()),
+            ..Default::default()
+        },
+    ]
 }

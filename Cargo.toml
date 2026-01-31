@@ -30,3 +30,4 @@ githook-cli = { path = "crates/githook-cli" }
 githook-syntax = { path = "crates/githook-syntax" }
 githook-eval = { path = "crates/githook-eval" }
 githook-git = { path = "crates/githook-git" }
+githook-macros = { path = "crates/githook-macros" }

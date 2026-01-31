@@ -1,6 +1,15 @@
 use std::path::PathBuf;
 use std::fs;
 use anyhow::{Result, bail, anyhow};
+use std::sync::Mutex;
+use lru::LruCache;
+use std::num::NonZeroUsize;
+use once_cell::sync::Lazy;
+
+// Global LRU cache for package contents (50 packages max)
+static PACKAGE_CACHE: Lazy<Mutex<LruCache<String, String>>> = Lazy::new(|| {
+    Mutex::new(LruCache::new(NonZeroUsize::new(50).unwrap()))
+});
 
 fn local_packages_dir() -> Result<PathBuf> {
     let home = dirs::home_dir()
@@ -77,60 +86,148 @@ pub fn load_package(
     namespace: &str,
     name: &str,
 ) -> Result<String> {
-    let path = resolve_package_path(namespace, name)?;
-
-    if path.exists() {
-        return Ok(fs::read_to_string(&path)?);
+    // Check LRU cache first
+    let cache_key = format!("{}::{}", namespace, name);
+    
+    if let Ok(mut cache) = PACKAGE_CACHE.lock() {
+        if let Some(cached_content) = cache.get(&cache_key) {
+            return Ok(cached_content.clone());
+        }
     }
+    
+    let path = resolve_package_path(namespace, name)?;
+    let etag_path = path.with_extension("etag");
 
-    if namespace != "local" {
-        eprintln!("Package @{}/{} not found locally. Try installing it first.", namespace, name);
-        eprintln!("Attempting to fetch from default repository...");
-        
+    let content = if namespace == "local" {
+        if path.exists() {
+            fs::read_to_string(&path)?
+        } else {
+            bail!("Package not found: @{}/{} (local namespace only checks filesystem)", namespace, name);
+        }
+    } else {
         let repo_url = get_default_repo_url(namespace);
-        
         validate_repo_url(&repo_url)?;
         
         let url = format!(
             "https://raw.githubusercontent.com/{}/refs/heads/main/{}/{}/{}.ghook",
             repo_url, namespace, name, name
         );
-        
-        eprintln!("Fetching from: {}", url);
-        
+
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()?;
-        
-        let response = client.get(&url).send()?;
-        
-        if !response.status().is_success() {
-            bail!(
-                "Failed to fetch package @{}/{} from {}: HTTP {}",
-                namespace,
-                name,
-                url,
-                response.status()
-            );
-        }
-        
-        let content = response.text()?;
-        
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(&path, &content)?;
-        
-        eprintln!("Package @{}/{} cached successfully!", namespace, name);
-        
-        return Ok(content);
-    }
 
-    bail!(
-        "Package not found: @{}/{}",
-        namespace,
-        name
-    );
+        if path.exists() && etag_path.exists() {
+            let cached_etag = fs::read_to_string(&etag_path).ok();
+            
+            if let Some(etag) = cached_etag {
+                let response = client.get(&url)
+                    .header("If-None-Match", etag.trim())
+                    .send()?;
+                
+                if response.status() == 304 {
+                    if cfg!(debug_assertions) {
+                        eprintln!("✓ Package @{}/{} is up-to-date (using cache)", namespace, name);
+                    }
+                    fs::read_to_string(&path)?
+                } else if response.status().is_success() {
+                    let new_etag = response.headers()
+                        .get("etag")
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_string());
+                
+                    let content = response.text()?;
+                    
+                    if let Some(parent) = path.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
+                    fs::write(&path, &content)?;
+                    
+                    if let Some(tag) = new_etag {
+                        let _ = fs::write(&etag_path, tag);
+                    }
+                    
+                    eprintln!("✓ Package @{}/{} updated", namespace, name);
+                    content
+                } else {
+                    bail!("Failed to fetch package: HTTP {}", response.status());
+                }
+            } else {
+                // No cached etag, fetch fresh
+                let response = client.get(&url).send()?;
+                
+                if !response.status().is_success() {
+                    bail!(
+                        "Failed to fetch package @{}/{} from {}: HTTP {}",
+                        namespace,
+                        name,
+                        url,
+                        response.status()
+                    );
+                }
+                
+                let etag = response.headers()
+                    .get("etag")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string());
+                
+                let content = response.text()?;
+                
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::write(&path, &content)?;
+                
+                if let Some(tag) = etag {
+                    let _ = fs::write(&etag_path, tag);
+                }
+                
+                eprintln!("✓ Package @{}/{} cached successfully", namespace, name);
+                content
+            }
+        } else {
+            // No cache exists, fetch fresh
+            eprintln!("Fetching package @{}/{}...", namespace, name);
+            
+            let response = client.get(&url).send()?;
+            
+            if !response.status().is_success() {
+                bail!(
+                    "Failed to fetch package @{}/{} from {}: HTTP {}",
+                    namespace,
+                    name,
+                    url,
+                    response.status()
+                );
+            }
+            
+            let etag = response.headers()
+                .get("etag")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+            
+            let content = response.text()?;
+            
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&path, &content)?;
+            
+            if let Some(tag) = etag {
+                let _ = fs::write(&etag_path, tag);
+            }
+            
+            eprintln!("✓ Package @{}/{} cached successfully", namespace, name);
+            content
+        }
+    };
+    
+    // Store in LRU cache
+    if let Ok(mut cache) = PACKAGE_CACHE.lock() {
+        cache.put(cache_key, content.clone());
+    }
+    
+    Ok(content)
 }
 
 pub async fn load_or_fetch_package(

@@ -2,10 +2,7 @@ use crate::ast::*;
 use crate::lexer::{Token, SpannedToken};
 use crate::error::Span;
 use anyhow::{Result, bail};
-
-// ============================================================================
-// PARSER V2 - Recursive Descent Parser
-// ============================================================================
+use smallvec::SmallVec;
 
 pub struct Parser {
     tokens: Vec<SpannedToken>,
@@ -16,19 +13,18 @@ impl Parser {
     pub fn new(tokens: Vec<SpannedToken>) -> Self {
         Self { tokens, pos: 0 }
     }
-    
-    // ========================================================================
-    // HELPERS
-    // ========================================================================
-    
+
+    #[inline]
     fn peek(&self) -> Option<&Token> {
         self.tokens.get(self.pos).map(|st| &st.token)
     }
-    
+
+    #[inline]
     fn peek_span(&self) -> Option<Span> {
         self.tokens.get(self.pos).map(|st| st.span)
     }
-    
+
+    #[inline]
     fn advance(&mut self) -> Option<SpannedToken> {
         if self.pos < self.tokens.len() {
             let token = self.tokens[self.pos].clone();
@@ -38,7 +34,7 @@ impl Parser {
             None
         }
     }
-    
+
     fn expect(&mut self, expected: Token) -> Result<Span> {
         match self.advance() {
             Some(st) if st.token == expected => Ok(st.span),
@@ -46,30 +42,25 @@ impl Parser {
             None => bail!("Expected {:?}, got EOF", expected),
         }
     }
-    
+
+    #[inline]
     fn skip_newlines(&mut self) {
         while matches!(self.peek(), Some(Token::Newline) | Some(Token::Comment(_))) {
             self.advance();
         }
     }
-    
-    // ========================================================================
-    // EXPRESSIONS
-    // ========================================================================
-    
-    /// Parse a full expression (handles operators)
+
     pub fn parse_expression(&mut self) -> Result<Expression> {
         self.parse_logical_or()
     }
     
-    /// Logical OR: expr1 or expr2
     fn parse_logical_or(&mut self) -> Result<Expression> {
         let mut left = self.parse_logical_and()?;
         
         while matches!(self.peek(), Some(Token::Or)) {
             self.advance();
             let right = self.parse_logical_and()?;
-            let span = left.span().merge(&right.span());
+            let span = left.span().merge(right.span());
             
             left = Expression::Binary {
                 left: Box::new(left),
@@ -82,14 +73,13 @@ impl Parser {
         Ok(left)
     }
     
-    /// Logical AND: expr1 and expr2
     fn parse_logical_and(&mut self) -> Result<Expression> {
         let mut left = self.parse_comparison()?;
         
         while matches!(self.peek(), Some(Token::And)) {
             self.advance();
             let right = self.parse_comparison()?;
-            let span = left.span().merge(&right.span());
+            let span = left.span().merge(right.span());
             
             left = Expression::Binary {
                 left: Box::new(left),
@@ -102,11 +92,9 @@ impl Parser {
         Ok(left)
     }
     
-    /// Comparison: expr1 == expr2, expr1 > expr2, etc.
     fn parse_comparison(&mut self) -> Result<Expression> {
         let left = self.parse_additive()?;
         
-        // Check for comparison operator
         let op = match self.peek() {
             Some(Token::Eq) => { self.advance(); BinaryOp::Eq }
             Some(Token::Ne) => { self.advance(); BinaryOp::Ne }
@@ -128,7 +116,6 @@ impl Parser {
         })
     }
     
-    /// Additive: expr1 + expr2, expr1 - expr2
     fn parse_additive(&mut self) -> Result<Expression> {
         let mut left = self.parse_multiplicative()?;
         
@@ -140,7 +127,7 @@ impl Parser {
             };
             
             let right = self.parse_multiplicative()?;
-            let span = left.span().merge(&right.span());
+            let span = left.span().merge(right.span());
             
             left = Expression::Binary {
                 left: Box::new(left),
@@ -153,7 +140,6 @@ impl Parser {
         Ok(left)
     }
     
-    /// Multiplicative: expr1 * expr2, expr1 / expr2, expr1 % expr2
     fn parse_multiplicative(&mut self) -> Result<Expression> {
         let mut left = self.parse_unary()?;
         
@@ -166,7 +152,7 @@ impl Parser {
             };
             
             let right = self.parse_unary()?;
-            let span = left.span().merge(&right.span());
+            let span = left.span().merge(right.span());
             
             left = Expression::Binary {
                 left: Box::new(left),
@@ -179,7 +165,6 @@ impl Parser {
         Ok(left)
     }
     
-    /// Unary: not expr, -expr
     fn parse_unary(&mut self) -> Result<Expression> {
         if matches!(self.peek(), Some(Token::Not)) {
             let start_span = self.advance().unwrap().span;
@@ -208,7 +193,6 @@ impl Parser {
         self.parse_postfix()
     }
     
-    /// Postfix: primary followed by .property or .method()
     fn parse_postfix(&mut self) -> Result<Expression> {
         let mut expr = self.parse_primary()?;
         
@@ -217,15 +201,13 @@ impl Parser {
                 Token::Dot => {
                     self.advance();
                     
-                    // Parse property/method name
                     let name = match self.advance() {
                         Some(SpannedToken { token: Token::Identifier(id), .. }) => id,
                         other => bail!("Expected identifier after '.', got {:?}", other),
                     };
                     
-                    // Check if it's a method call
                     if matches!(self.peek(), Some(Token::LeftParen)) {
-                        self.advance(); // consume (
+                        self.advance();
                         
                         let mut args = Vec::new();
                         
@@ -250,10 +232,9 @@ impl Parser {
                             span,
                         };
                     } else {
-                        // Property access - convert to PropertyAccess chain
                         let span = *expr.span();
                         let mut chain = match expr {
-                            Expression::Identifier(id, _) => vec![id],
+                            Expression::Identifier(id, _) => SmallVec::from_vec(vec![id]),
                             Expression::PropertyAccess { chain, .. } => chain,
                             _ => bail!("Cannot access property on non-identifier expression"),
                         };
@@ -270,7 +251,6 @@ impl Parser {
         Ok(expr)
     }
     
-    /// Primary: literals, identifiers, arrays, parenthesized expressions
     fn parse_primary(&mut self) -> Result<Expression> {
         match self.peek() {
             Some(Token::True) => {
@@ -300,7 +280,6 @@ impl Parser {
             Some(Token::String(_)) => {
                 let st = self.advance().unwrap();
                 if let Token::String(s) = st.token {
-                    // Check for string interpolation
                     if s.contains("${") {
                         self.parse_interpolated_string(s, st.span)
                     } else {
@@ -314,10 +293,9 @@ impl Parser {
             Some(Token::Identifier(_)) => {
                 let st = self.advance().unwrap();
                 if let Token::Identifier(id) = st.token {
-                    // Check if this is a closure: param => expr
                     if matches!(self.peek(), Some(Token::FatArrow)) {
-                        let start_span = st.span.clone();
-                        self.advance(); // consume =>
+                        let start_span = st.span;
+                        self.advance();
                         let body = Box::new(self.parse_expression()?);
                         let span = start_span.merge(body.span());
                         Ok(Expression::Closure {
@@ -335,7 +313,7 @@ impl Parser {
             
             Some(Token::LeftBracket) => {
                 let start_span = self.advance().unwrap().span;
-                let mut items = Vec::new();
+                let mut items = Vec::with_capacity(8); // Pre-allocate for typical arrays
                 
                 self.skip_newlines();
                 
@@ -367,27 +345,24 @@ impl Parser {
         }
     }
     
-    /// Parse string interpolation: "text ${expr} more"
     fn parse_interpolated_string(&mut self, s: String, span: Span) -> Result<Expression> {
-        let mut parts = Vec::new();
+        let mut parts = Vec::with_capacity(4); // Pre-allocate for typical interpolations
         let mut current = String::new();
         let mut chars = s.chars().peekable();
         
         while let Some(ch) = chars.next() {
             if ch == '$' && chars.peek() == Some(&'{') {
-                // Save current literal
                 if !current.is_empty() {
                     parts.push(StringPart::Literal(current.clone()));
                     current.clear();
                 }
                 
-                chars.next(); // consume {
+                chars.next();
                 
-                // Extract expression until }
                 let mut expr_str = String::new();
                 let mut depth = 1;
                 
-                while let Some(ch) = chars.next() {
+                for ch in chars.by_ref() {
                     if ch == '{' {
                         depth += 1;
                         expr_str.push(ch);
@@ -402,8 +377,6 @@ impl Parser {
                     }
                 }
                 
-                // Parse the expression (need to use full expression parser)
-                // Create a new lexer/parser for the embedded expression
                 use crate::lexer::tokenize;
                 let tokens = tokenize(&expr_str)?;
                 let mut expr_parser = Parser::new(tokens);
@@ -421,16 +394,13 @@ impl Parser {
         
         Ok(Expression::InterpolatedString { parts, span })
     }
-    
-    // ========================================================================
-    // STATEMENTS
-    // ========================================================================
-    
+
     pub fn parse_statement(&mut self) -> Result<Statement> {
         self.skip_newlines();
         
         match self.peek() {
             Some(Token::Run) => self.parse_run(),
+            Some(Token::Print) => self.parse_print(),
             Some(Token::Block) => self.parse_block_or_blockif(),
             Some(Token::Warn) => self.parse_warn_or_warnif(),
             Some(Token::Allow) => self.parse_allow(),
@@ -465,10 +435,20 @@ impl Parser {
         })
     }
     
+    fn parse_print(&mut self) -> Result<Statement> {
+        let start_span = self.expect(Token::Print)?;
+        
+        let message = self.parse_expression()?;
+        
+        Ok(Statement::Print {
+            message,
+            span: start_span,
+        })
+    }
+    
     fn parse_block_or_blockif(&mut self) -> Result<Statement> {
         let start_span = self.expect(Token::Block)?;
         
-        // Check if it's "block if" or just "block"
         if matches!(self.peek(), Some(Token::If)) {
             self.advance();
             
@@ -477,7 +457,6 @@ impl Parser {
             let mut message = None;
             let mut interactive = None;
             
-            // Check for optional message/interactive
             if matches!(self.peek(), Some(Token::Identifier(id)) if id == "message") {
                 self.advance();
                 message = match self.advance() {
@@ -501,7 +480,6 @@ impl Parser {
                 span: start_span,
             })
         } else {
-            // Just "block"
             let message = match self.advance() {
                 Some(SpannedToken { token: Token::String(s), .. }) => s,
                 other => bail!("Expected string after 'block', got {:?}", other),
@@ -578,7 +556,7 @@ impl Parser {
         let start_span = self.expect(Token::Parallel)?;
         self.expect(Token::LeftBrace)?;
         
-        let mut commands = Vec::new();
+        let mut commands = Vec::with_capacity(8); // Pre-allocate for typical parallel blocks
         
         self.skip_newlines();
         
@@ -597,7 +575,7 @@ impl Parser {
         self.expect(Token::RightBrace)?;
         
         Ok(Statement::Parallel {
-            commands,
+            commands: SmallVec::from_vec(commands),
             span: start_span,
         })
     }
@@ -612,7 +590,6 @@ impl Parser {
         
         self.expect(Token::Assign)?;
         
-        // Parse value - now just use expression parsing (covers arrays, numbers, strings, etc.)
         let expr = self.parse_expression()?;
         let value = LetValue::Expression(expr);
         
@@ -636,13 +613,14 @@ impl Parser {
     fn parse_foreach(&mut self) -> Result<Statement> {
         let start_span = self.expect(Token::Foreach)?;
         
-        // Parse collection expression
         let collection = self.parse_expression()?;
         
-        // Optional where clause
-        let where_clause = if matches!(self.peek(), Some(Token::Where)) {
+        let pattern = if matches!(self.peek(), Some(Token::Matching)) {
             self.advance();
-            Some(self.parse_expression()?)
+            match self.advance() {
+                Some(SpannedToken { token: Token::String(s), .. }) => Some(s),
+                other => bail!("Expected string pattern after 'matching', got {:?}", other),
+            }
         } else {
             None
         };
@@ -650,7 +628,6 @@ impl Parser {
         self.expect(Token::LeftBrace)?;
         self.skip_newlines();
         
-        // Parse loop variable
         let var = match self.advance() {
             Some(SpannedToken { token: Token::Identifier(id), .. }) => id,
             other => bail!("Expected identifier for loop variable, got {:?}", other),
@@ -659,7 +636,6 @@ impl Parser {
         self.expect(Token::In)?;
         self.skip_newlines();
         
-        // Parse body
         let body = self.parse_body()?;
         
         self.expect(Token::RightBrace)?;
@@ -667,7 +643,7 @@ impl Parser {
         Ok(Statement::ForEach {
             collection,
             var,
-            where_clause,
+            pattern,
             body,
             span: start_span,
         })
@@ -708,7 +684,7 @@ impl Parser {
         self.expect(Token::LeftBrace)?;
         self.skip_newlines();
         
-        let mut arms = Vec::new();
+        let mut arms = Vec::with_capacity(4); // Pre-allocate for typical match arms
         
         while !matches!(self.peek(), Some(Token::RightBrace)) {
             let arm = self.parse_match_arm()?;
@@ -728,16 +704,13 @@ impl Parser {
     fn parse_try(&mut self) -> Result<Statement> {
         let start_span = self.expect(Token::Try)?;
         
-        // Parse try body
         self.expect(Token::LeftBrace)?;
         let body = self.parse_body()?;
         self.expect(Token::RightBrace)?;
         
-        // Parse catch clause
         self.skip_newlines();
         self.expect(Token::Catch)?;
         
-        // Optional catch variable: catch error { ... }
         let catch_var = if matches!(self.peek(), Some(Token::Identifier(_))) {
             if let Some(SpannedToken { token: Token::Identifier(var), .. }) = self.advance() {
                 Some(var)
@@ -779,14 +752,13 @@ impl Parser {
             
             _ => {
                 let expr = self.parse_expression()?;
-                let span = expr.span().clone();
+                let span = *expr.span();
                 MatchPattern::Expression(expr, span)
             }
         };
         
         self.expect(Token::Arrow)?;
         
-        // Parse arm body (single statement or block)
         let body = if matches!(self.peek(), Some(Token::LeftBrace)) {
             self.advance();
             let stmts = self.parse_body()?;
@@ -811,10 +783,9 @@ impl Parser {
             other => bail!("Expected identifier after 'macro', got {:?}", other),
         };
         
-        // Parse optional parameters
         let params = if matches!(self.peek(), Some(Token::LeftParen)) {
             self.advance();
-            let mut params = Vec::new();
+            let mut params = Vec::with_capacity(4); // Pre-allocate for typical macro params
             
             while !matches!(self.peek(), Some(Token::RightParen)) {
                 let param = match self.advance() {
@@ -841,7 +812,7 @@ impl Parser {
         
         Ok(Statement::MacroDef {
             name,
-            params,
+            params: SmallVec::from_vec(params),
             body,
             span: start_span,
         })
@@ -856,19 +827,17 @@ impl Parser {
             other => bail!("Expected identifier after '@', got {:?}", other),
         };
         
-        // Check for namespace
-        let final_name = if matches!(self.peek(), Some(Token::Colon)) {
+        let final_name = if matches!(self.peek(), Some(Token::Dot)) {
             self.advance();
             namespace = Some(name);
             match self.advance() {
                 Some(SpannedToken { token: Token::Identifier(id), .. }) => id,
-                other => bail!("Expected identifier after ':', got {:?}", other),
+                other => bail!("Expected identifier after '.', got {:?}", other),
             }
         } else {
             name
         };
         
-        // Parse optional arguments
         let args = if matches!(self.peek(), Some(Token::LeftParen)) {
             self.advance();
             let mut args = Vec::new();
@@ -953,7 +922,6 @@ impl Parser {
             other => bail!("Expected identifier after 'group', got {:?}", other),
         };
         
-        // Parse optional severity
         let severity = match self.peek() {
             Some(Token::Identifier(id)) if id == "critical" => {
                 self.advance();
@@ -970,12 +938,11 @@ impl Parser {
             _ => None,
         };
         
-        // Parse optional enabled
         let enabled = if matches!(self.peek(), Some(Token::Identifier(id)) if id == "enabled") {
             self.advance();
             true
         } else {
-            true // default
+            true
         };
         
         self.expect(Token::LeftBrace)?;
@@ -992,7 +959,7 @@ impl Parser {
     }
     
     fn parse_body(&mut self) -> Result<Vec<Statement>> {
-        let mut statements = Vec::new();
+        let mut statements = Vec::with_capacity(16); // Pre-allocate for typical blocks
         
         self.skip_newlines();
         
@@ -1005,10 +972,9 @@ impl Parser {
     }
 }
 
-/// Parse a full file
 pub fn parse(tokens: Vec<SpannedToken>) -> Result<Vec<Statement>> {
     let mut parser = Parser::new(tokens);
-    let mut statements = Vec::new();
+    let mut statements = Vec::with_capacity(32); // Pre-allocate for typical programs
     
     parser.skip_newlines();
     

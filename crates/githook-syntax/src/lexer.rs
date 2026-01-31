@@ -1,88 +1,97 @@
 use crate::error::{Span, LexError};
+use std::collections::HashMap;
+use once_cell::sync::Lazy;
 
-// ============================================================================
-// SIMPLIFIED TOKEN SYSTEM
-// ============================================================================
+// Pre-computed keyword map for O(1) lookups instead of linear match
+static KEYWORDS: Lazy<HashMap<&'static str, Token>> = Lazy::new(|| {
+    let mut m = HashMap::with_capacity(32);
+    m.insert("run", Token::Run);
+    m.insert("print", Token::Print);
+    m.insert("block", Token::Block);
+    m.insert("warn", Token::Warn);
+    m.insert("allow", Token::Allow);
+    m.insert("parallel", Token::Parallel);
+    m.insert("let", Token::Let);
+    m.insert("foreach", Token::Foreach);
+    m.insert("if", Token::If);
+    m.insert("else", Token::Else);
+    m.insert("match", Token::Match);
+    m.insert("matching", Token::Matching);
+    m.insert("try", Token::Try);
+    m.insert("catch", Token::Catch);
+    m.insert("break", Token::Break);
+    m.insert("continue", Token::Continue);
+    m.insert("macro", Token::Macro);
+    m.insert("import", Token::Import);
+    m.insert("use", Token::Use);
+    m.insert("group", Token::Group);
+    m.insert("in", Token::In);
+    m.insert("not", Token::Not);
+    m.insert("and", Token::And);
+    m.insert("or", Token::Or);
+    m.insert("true", Token::True);
+    m.insert("false", Token::False);
+    m.insert("null", Token::Null);
+    m
+});
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
-    // Core Keywords
     Run,
+    Print,
     Block,
     Warn,
     Allow,
     Parallel,
-    
     Let,
     Foreach,
     If,
     Else,
     Match,
-    Where,
+    Matching,
     Try,
     Catch,
     Break,
     Continue,
-    
     Macro,
     Import,
     Use,
     Group,
-    
-    // Logical
     In,
     Not,
     And,
     Or,
-    
-    // Literals
     True,
     False,
     Null,
-    
-    // Comparison Operators
-    Eq,        // ==
-    Ne,        // !=
-    Lt,        // <
-    Le,        // <=
-    Gt,        // >
-    Ge,        // >=
-    
-    // Arithmetic Operators
-    Plus,      // +
-    Minus,     // -
-    Star,      // *
-    Slash,     // /
-    Percent,   // %
-    
-    // Assignment
-    Assign,    // =
-    
-    // Delimiters
-    LeftBrace,     // {
-    RightBrace,    // }
-    LeftBracket,   // [
-    RightBracket,  // ]
-    LeftParen,     // (
-    RightParen,    // )
-    
-    // Punctuation
-    Dot,           // .
-    Comma,         // ,
-    Colon,         // :
-    Arrow,         // ->
-    FatArrow,      // =>
-    
-    // Special
-    At,            // @ (for macros)
-    Dollar,        // $ (for interpolation)
-    
-    // Values
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Percent,
+    Assign,
+    LeftBrace,
+    RightBrace,
+    LeftBracket,
+    RightBracket,
+    LeftParen,
+    RightParen,
+    Dot,
+    Comma,
+    Colon,
+    Arrow,
+    FatArrow,
+    At,
+    Dollar, 
     Identifier(String),
     String(String),
     Number(f64),
-    
-    // Metadata
     Newline,
     Comment(String),
 }
@@ -93,12 +102,8 @@ pub struct SpannedToken {
     pub span: Span,
 }
 
-// ============================================================================
-// LEXER IMPLEMENTATION
-// ============================================================================
-
 pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
-    let mut tokens = Vec::new();
+    let mut tokens = Vec::with_capacity(input.len() / 4); // Estimate ~4 chars per token
     let mut chars = input.chars().peekable();
     
     let mut line = 1;
@@ -121,7 +126,6 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
         let start_offset = offset;
         
         match ch {
-            // Whitespace
             ' ' | '\t' | '\r' => {
                 chars.next();
                 bump(ch, &mut line, &mut col, &mut offset);
@@ -136,7 +140,6 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                 });
             }
             
-            // Comments
             '#' => {
                 let mut comment = String::new();
                 chars.next();
@@ -157,7 +160,6 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                 });
             }
             
-            // Strings
             '"' => {
                 chars.next();
                 bump(ch, &mut line, &mut col, &mut offset);
@@ -195,7 +197,6 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                 });
             }
             
-            // Numbers
             '0'..='9' => {
                 let mut num_str = String::new();
                 while let Some(&ch) = chars.peek() {
@@ -214,9 +215,8 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                         span: Span::new(start_line, start_col, start_offset, offset),
                     })?;
                 
-                // Check for size unit suffix (KB, MB, GB, TB)
-                if let Some(&ch) = chars.peek() {
-                    if ch.is_alphabetic() {
+                if let Some(&ch) = chars.peek()
+                    && ch.is_alphabetic() {
                         let mut unit = String::new();
                         while let Some(&ch) = chars.peek() {
                             if ch.is_alphabetic() {
@@ -228,7 +228,6 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                             }
                         }
                         
-                        // Apply multiplier based on unit
                         match unit.to_uppercase().as_str() {
                             "KB" => num *= 1024.0,
                             "MB" => num *= 1024.0 * 1024.0,
@@ -243,7 +242,6 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                             }
                         }
                     }
-                }
                 
                 tokens.push(SpannedToken {
                     token: Token::Number(num),
@@ -251,7 +249,6 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                 });
             }
             
-            // Operators
             '=' => {
                 chars.next();
                 bump(ch, &mut line, &mut col, &mut offset);
@@ -271,7 +268,6 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                         span: Span::new(start_line, start_col, start_offset, offset),
                     });
                 } else {
-                    // Single = for assignment
                     tokens.push(SpannedToken {
                         token: Token::Assign,
                         span: Span::new(start_line, start_col, start_offset, offset),
@@ -349,7 +345,6 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                         span: Span::new(start_line, start_col, start_offset, offset),
                     });
                 } else {
-                    // Just minus operator
                     tokens.push(SpannedToken {
                         token: Token::Minus,
                         span: Span::new(start_line, start_col, start_offset, offset),
@@ -379,9 +374,7 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                 chars.next();
                 bump(ch, &mut line, &mut col, &mut offset);
                 
-                // Check for comment
                 if chars.peek() == Some(&'/') {
-                    // Line comment
                     chars.next();
                     bump('/', &mut line, &mut col, &mut offset);
                     
@@ -400,7 +393,6 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                         span: Span::new(start_line, start_col, start_offset, offset),
                     });
                 } else {
-                    // Division operator
                     tokens.push(SpannedToken {
                         token: Token::Slash,
                         span: Span::new(start_line, start_col, start_offset, offset),
@@ -417,7 +409,6 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                 });
             }
             
-            // Single-char tokens
             '{' => {
                 chars.next();
                 bump(ch, &mut line, &mut col, &mut offset);
@@ -507,9 +498,8 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                 });
             }
             
-            // Identifiers and keywords
             _ if ch.is_alphabetic() || ch == '_' => {
-                let mut ident = String::new();
+                let mut ident = String::with_capacity(16); // Pre-allocate reasonable size
                 while let Some(&ch) = chars.peek() {
                     if ch.is_alphanumeric() || ch == '_' {
                         ident.push(ch);
@@ -520,35 +510,10 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                     }
                 }
                 
-                let token = match ident.as_str() {
-                    "run" => Token::Run,
-                    "block" => Token::Block,
-                    "warn" => Token::Warn,
-                    "allow" => Token::Allow,
-                    "parallel" => Token::Parallel,
-                    "let" => Token::Let,
-                    "foreach" => Token::Foreach,
-                    "if" => Token::If,
-                    "else" => Token::Else,
-                    "match" => Token::Match,
-                    "where" => Token::Where,
-                    "try" => Token::Try,
-                    "catch" => Token::Catch,
-                    "break" => Token::Break,
-                    "continue" => Token::Continue,
-                    "macro" => Token::Macro,
-                    "import" => Token::Import,
-                    "use" => Token::Use,
-                    "group" => Token::Group,
-                    "in" => Token::In,
-                    "not" => Token::Not,
-                    "and" => Token::And,
-                    "or" => Token::Or,
-                    "true" => Token::True,
-                    "false" => Token::False,
-                    "null" => Token::Null,
-                    _ => Token::Identifier(ident),
-                };
+                // Fast HashMap lookup instead of linear match
+                let token = KEYWORDS.get(ident.as_str())
+                    .cloned()
+                    .unwrap_or_else(|| Token::Identifier(ident));
                 
                 tokens.push(SpannedToken {
                     token,

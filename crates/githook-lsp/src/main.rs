@@ -5,8 +5,10 @@ mod backend;
 mod diagnostics;
 mod completion;
 mod document;
+mod docs;
 mod goto_definition;
 mod hover;
+mod inlay_hints;
 mod import_resolver;
 mod symbols;
 mod references;
@@ -31,7 +33,7 @@ async fn main() {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 
-    let (service, socket) = LspService::new(|client| GithookLanguageServer::new(client));
+    let (service, socket) = LspService::new(GithookLanguageServer::new);
     
     Server::new(stdin, stdout, socket)
         .serve(service)

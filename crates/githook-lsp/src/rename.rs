@@ -29,9 +29,7 @@ pub fn prepare_rename(doc: &DocumentState, position: Position) -> Option<Range> 
     let word = &line[word_start..word_end];
     
     // Only allow rename on macros
-    if word.starts_with('@') {
-        let macro_ref = &word[1..];
-        
+    if let Some(macro_ref) = word.strip_prefix('@') {
         // Don't allow rename on namespaced macros (would need cross-file edit)
         if macro_ref.contains(':') {
             return None;
