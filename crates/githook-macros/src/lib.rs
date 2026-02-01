@@ -8,6 +8,27 @@ pub fn docs(_attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
+pub fn builtin(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let input_fn = parse_macro_input!(item as ItemFn);
+    let fn_name = &input_fn.sig.ident;
+    let fn_name_str = fn_name.to_string();
+    
+    let expanded = quote! {
+        #[allow(dead_code)]
+        #input_fn
+        
+        inventory::submit! {
+            crate::builtins::BuiltinEntry {
+                name: #fn_name_str,
+                func: #fn_name,
+            }
+        }
+    };
+    
+    TokenStream::from(expanded)
+}
+
+#[proc_macro_attribute]
 pub fn export_macro(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input_fn = parse_macro_input!(item as ItemFn);
     let fn_name = &input_fn.sig.ident;
