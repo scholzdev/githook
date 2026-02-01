@@ -1,5 +1,4 @@
 mod updater;
-mod config;
 mod errors;
 
 use anyhow::{Context, Result};
@@ -11,7 +10,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use config::Config;
 use errors::{enhance_error, EnhancedError};
 
 #[derive(Parser)]
@@ -21,18 +19,6 @@ use errors::{enhance_error, EnhancedError};
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
-
-    #[arg(long)]
-    cache: bool,
-
-    #[arg(long)]
-    no_cache: bool,
-
-    #[arg(long = "only-group", value_name = "GROUPS")]
-    only_groups: Option<String>,
-
-    #[arg(long = "skip-group", value_name = "GROUPS")]
-    skip_groups: Option<String>,
 
     #[arg(value_name = "HOOK_TYPE")]
     hook_type: Option<String>,
@@ -46,44 +32,18 @@ enum Commands {
     List,
     CheckUpdate,
     Update,
-    Init {
-        #[arg(long)]
-        config: bool,
-    },
+    Init,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-
-    let mut config = Config::load().unwrap_or_default();
-    
-    let cache_opt = if cli.cache {
-        Some(true)
-    } else if cli.no_cache {
-        Some(false)
-    } else {
-        None
-    };
-    
-    config.merge_cli_args(
-        cache_opt,
-        false,
-        cli.only_groups.clone(),
-        cli.skip_groups.clone(),
-    );
 
     if let Some(command) = cli.command {
         return match command {
             Commands::List => list_packages(),
             Commands::CheckUpdate => updater::check_for_updates(),
             Commands::Update => updater::perform_update(),
-            Commands::Init { config: create_config } => {
-                if create_config {
-                    init_config()
-                } else {
-                    init_hooks()
-                }
-            }
+            Commands::Init => init_hooks()
         };
     }
 
@@ -100,11 +60,7 @@ fn main() -> Result<()> {
         }
     };
 
-    if config.colored {
-        println!("{} {}", "".cyan().bold(), format!("Running {}...", config_path.display()).bold());
-    } else {
-        println!("Running {}...", config_path.display());
-    }
+    println!("{} {}", "".cyan().bold(), format!("Running {}...", config_path.display()).bold());
 
     let source = fs::read_to_string(&config_path)
         .with_context(|| format!("Failed to read config from {:?}", config_path))?;
@@ -140,7 +96,6 @@ fn main() -> Result<()> {
     
     let mut executor = Executor::new()
         .with_git_files(git_files);
-    executor.verbose = config.verbose;
 
     let result = match executor.execute_statements(&statements) {
         Ok(res) => res,
@@ -433,44 +388,6 @@ fn get_git_files(hook_type: &str) -> Result<Vec<String>> {
         .collect();
     
     Ok(files)
-}
-
-fn init_config() -> Result<()> {
-    let config_path = PathBuf::from(".githookrc");
-    
-    if config_path.exists() {
-        println!("{} Config file already exists at {}", "".green().bold(), config_path.display());
-        return Ok(());
-    }
-    
-    let default_config = r#"# Githook Configuration
-# See https://github.com/yourusername/githook for more info
-
-# Enable colored output
-colored = true
-
-# Enable verbose output
-verbose = false
-
-# Enable package caching
-cache = true
-
-# Additional search paths for packages
-# search_paths = ["./custom-packages"]
-
-# Environment variables
-# [env]
-# NODE_ENV = "production"
-
-# Execution timeout in seconds
-# timeout = 30
-"#;
-    
-    fs::write(&config_path, default_config)
-        .with_context(|| format!("Failed to write config to {:?}", config_path))?;
-    
-    println!("{} Created config file: {}", "".green().bold(), config_path.display());
-    Ok(())
 }
 
 fn init_hooks() -> Result<()> {
