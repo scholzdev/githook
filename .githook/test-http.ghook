@@ -1,0 +1,24 @@
+group test_http info {
+    print "=== Testing http.get() ==="
+    
+    let response = http.get("https://httpbin.org/get")
+    
+    print "Status: " + response.status
+    
+    print "OK: " + response.ok
+
+    if response.ok {
+        print "HTTP request successful"
+        let data = response.json()
+        print "URL from response:"
+        print data.url
+    }
+    
+    let gh = http.get("https://api.github.com")
+    print "GitHub API status:"
+    print gh.status
+
+    if gh.ok {
+        print "GitHub API accessible"
+    }
+}

@@ -1,10 +1,5 @@
-foreach git.staged_files { f in
-    let ext = f.extension
-    let has_rs = ext.ends_with(".rs")
+let name = "Test HTTP Hook"
 
-    if has_rs {
-      run "echo File: ${f.name}, Path: ${f.path.string}, Basename: ${f.path.basename}"
-      run "echo '  → Contains test, Parent: ${f.path.parent}'"
-    }
-    break
+group test info {
+    print "Running " + name
 }

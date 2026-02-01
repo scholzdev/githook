@@ -1,0 +1,27 @@
+group test_file_function info {
+    // Test with existing file
+    let cargo = file("Cargo.toml")
+    print cargo.name
+    print cargo.extension
+    print cargo.size
+    
+    if cargo.size > 0 {
+        print "Cargo.toml loaded successfully"
+    }
+    
+    // Test with another file
+    let changelog = file("CHANGELOG.md")
+    if changelog.exists() {
+        print "CHANGELOG.md exists"
+        print changelog.name
+        print changelog.extension
+    }
+    
+    // Test path properties
+    let syntax = file("SYNTAX.md")
+    if syntax.exists() {
+        print "SYNTAX.md exists"
+        print syntax.dirname
+        print syntax.basename
+    }
+}

@@ -1,0 +1,13 @@
+print "=== Post-Merge Hook ==="
+print "Merged: " + git.merge.source + " → " + git.merge.target
+
+foreach git.files.modified { file in
+    if file.extension == "lock" {
+        print "Lockfile changed: " + file.name
+        print "   Run: npm install / cargo build"
+    }
+}
+
+if git.files.modified.length > 10 {
+    print "Many files changed (" + git.files.modified.length + ")"
+}

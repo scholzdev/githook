@@ -1,0 +1,5 @@
+group test_builtins info {
+    // Test dir()
+    let removed = rm("CLI_IMPROVEMENTS.md")
+    print "Removed file:" + removed
+}

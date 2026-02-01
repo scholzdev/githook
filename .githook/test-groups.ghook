@@ -1,0 +1,25 @@
+group format_with_ruff critical {
+    foreach git.files.staged matching "*.py" { file in
+        print "Checking: " + file.name
+    }
+}
+
+group lint_javascript warning {
+    foreach git.files.staged matching "*.js" { file in
+        print "Linting: " + file.name
+    }
+}
+
+group check_typescript info {
+    foreach git.files.staged matching "*.ts" { file in
+        print "Type checking: " + file.name
+    }
+}
+
+group security_scan {
+    print "Scanning for secrets..."
+}
+
+group disabled_check disabled {
+    print "This should NOT show"
+}

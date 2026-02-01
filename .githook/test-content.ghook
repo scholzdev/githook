@@ -1,0 +1,28 @@
+group test_content info {
+    let cargo = file("Cargo.toml")
+    
+    // Read content
+    let content = cargo.content
+    print "Content length:"
+    print content.length
+    
+    // Check if content contains something
+    if content.contains("workspace") {
+        print "Cargo.toml is a workspace"
+    }
+    
+    // Test with a small file
+    let changelog = file("CHANGELOG.md")
+    if changelog.exists() {
+        let text = changelog.content
+        let all_lines = text.lines()
+        print "Changelog lines:"
+        print all_lines.length
+        
+        // Check first line
+        if all_lines.length > 0 {
+            print "First line:"
+            print all_lines.first()
+        }
+    }
+}
