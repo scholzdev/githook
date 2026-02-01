@@ -2,7 +2,6 @@ use colored::*;
 use githook_syntax::error::Span;
 use std::fmt;
 
-/// Enhanced error with context and suggestions
 pub struct EnhancedError {
     pub message: String,
     pub span: Option<Span>,
@@ -49,12 +48,9 @@ impl EnhancedError {
         self
     }
     
-    /// Display the error with colored output and context
     pub fn display(&self) {
-        // Error header
         eprintln!("{} {}", "error:".red().bold(), self.message.bold());
         
-        // File location
         if let (Some(file), Some(span)) = (&self.file, &self.span) {
             eprintln!("  {} {}:{}:{}", 
                 "-->".blue().bold(), 
@@ -64,19 +60,16 @@ impl EnhancedError {
             );
         }
         
-        // Source code with span
         if let (Some(source), Some(span)) = (&self.source, &self.span) {
             eprintln!();
             self.display_source_with_span(source, span);
         }
         
-        // Suggestion
         if let Some(suggestion) = &self.suggestion {
             eprintln!();
             eprintln!("{} {}", "suggestion:".green().bold(), suggestion);
         }
         
-        // Help
         if let Some(help) = &self.help {
             eprintln!();
             eprintln!("{} {}", "help:".cyan().bold(), help);
@@ -86,18 +79,15 @@ impl EnhancedError {
     fn display_source_with_span(&self, source: &str, span: &Span) {
         let lines: Vec<&str> = source.lines().collect();
         
-        // Get the line index (0-based)
         let line_idx = if span.line > 0 { span.line - 1 } else { 0 };
         
         if line_idx >= lines.len() {
             return;
         }
         
-        // Calculate line number width for alignment
         let max_line = (span.line + 2).min(lines.len());
         let line_num_width = max_line.to_string().len();
         
-        // Show context: 2 lines before and after
         let start = line_idx.saturating_sub(2);
         let end = (line_idx + 3).min(lines.len());
         
@@ -106,7 +96,6 @@ impl EnhancedError {
             let line = lines.get(i).unwrap_or(&"");
             
             if line_num == span.line {
-                // Error line
                 eprintln!("{:>width$} {} {}", 
                     line_num.to_string().blue().bold(), 
                     "|".blue().bold(),
@@ -114,7 +103,6 @@ impl EnhancedError {
                     width = line_num_width
                 );
                 
-                // Error indicator with caret
                 let spaces = " ".repeat(span.col.saturating_sub(1));
                 let caret_len = if span.end > span.start {
                     (span.end - span.start).max(1)
@@ -130,7 +118,6 @@ impl EnhancedError {
                     width = line_num_width
                 );
             } else {
-                // Context lines
                 eprintln!("{:>width$} {} {}", 
                     line_num.to_string().dimmed(), 
                     "|".blue().bold(),
@@ -156,7 +143,6 @@ impl fmt::Debug for EnhancedError {
 
 impl std::error::Error for EnhancedError {}
 
-/// Convert anyhow::Error to EnhancedError with suggestions
 pub fn enhance_error(err: anyhow::Error, file: Option<String>, source: Option<String>) -> EnhancedError {
     let message = err.to_string();
     
@@ -170,7 +156,6 @@ pub fn enhance_error(err: anyhow::Error, file: Option<String>, source: Option<St
         enhanced = enhanced.with_source(source);
     }
     
-    // Add contextual suggestions based on error type
     if message.contains("Variable") && message.contains("not found") {
         enhanced = enhanced.with_suggestion("Check variable name spelling or declare it with 'let'");
         enhanced = enhanced.with_help("Available built-in variables: git, env");

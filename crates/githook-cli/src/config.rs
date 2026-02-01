@@ -3,38 +3,29 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Configuration for githook
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
-    /// Enable colored output (default: true)
     #[serde(default = "default_true")]
     pub colored: bool,
-    
-    /// Verbose output (default: false)
+
     #[serde(default)]
     pub verbose: bool,
-    
-    /// Enable caching of packages (default: true)
+
     #[serde(default = "default_true")]
     pub cache: bool,
-    
-    /// Groups to run (empty = all)
+
     #[serde(default)]
     pub only_groups: Vec<String>,
-    
-    /// Groups to skip
+
     #[serde(default)]
     pub skip_groups: Vec<String>,
-    
-    /// Paths to search for hook files
+
     #[serde(default = "default_search_paths")]
     pub search_paths: Vec<String>,
     
-    /// Custom environment variables
     #[serde(default)]
     pub env: std::collections::HashMap<String, String>,
     
-    /// Timeout for commands in seconds (0 = no timeout)
     #[serde(default)]
     pub timeout: u64,
 }

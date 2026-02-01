@@ -43,15 +43,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// List installed packages
     List,
-    /// Check for githook updates
     CheckUpdate,
-    /// Update githook to latest version
     Update,
-    /// Initialize githook in current repository
     Init {
-        /// Create config file with defaults
         #[arg(long)]
         config: bool,
     },
@@ -60,10 +55,8 @@ enum Commands {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Load config file (.githookrc)
     let mut config = Config::load().unwrap_or_default();
     
-    // Merge CLI arguments
     let cache_opt = if cli.cache {
         Some(true)
     } else if cli.no_cache {
@@ -108,19 +101,14 @@ fn main() -> Result<()> {
     };
 
     if config.colored {
-        println!("{} {}", "→".cyan().bold(), format!("Running {}...", config_path.display()).bold());
+        println!("{} {}", "".cyan().bold(), format!("Running {}...", config_path.display()).bold());
     } else {
-        println!("→ Running {}...", config_path.display());
+        println!("Running {}...", config_path.display());
     }
 
     let source = fs::read_to_string(&config_path)
         .with_context(|| format!("Failed to read config from {:?}", config_path))?;
 
-    // ========================================================================
-    // V2 SYSTEM: Lexer → Parser → Executor
-    // ========================================================================
-    
-    // 1. Tokenize
     let tokens = match lexer::tokenize(&source) {
         Ok(tokens) => tokens,
         Err(lex_error) => {
@@ -135,7 +123,6 @@ fn main() -> Result<()> {
         }
     };
 
-    // 2. Parse
     let statements = match parser::parse(tokens) {
         Ok(stmts) => stmts,
         Err(parse_error) => {
@@ -149,10 +136,8 @@ fn main() -> Result<()> {
         }
     };
 
-    // 3. Get git files
     let git_files = get_git_files(&hook_type)?;
     
-    // 4. Execute with V2 executor
     let mut executor = Executor::new()
         .with_git_files(git_files);
     executor.verbose = config.verbose;
@@ -167,10 +152,8 @@ fn main() -> Result<()> {
         }
     };
 
-    // Print summary
     println!();
     
-    // Print all checks in structured format
     if !executor.check_results.is_empty() {
         for check in &executor.check_results {
             let status_text: colored::ColoredString = match check.status {
@@ -179,15 +162,12 @@ fn main() -> Result<()> {
                 githook_eval::CheckStatus::Failed => "Failed".red(),
             };
             
-            // Severity prefix in color, padded to same width
             let (severity_prefix, prefix_len): (colored::ColoredString, usize) = match check.severity {
                 githook_syntax::ast::Severity::Critical => ("[Critical]".red(), 10),
                 githook_syntax::ast::Severity::Warning => ("[Warning] ".yellow(), 10),
                 githook_syntax::ast::Severity::Info => ("[Info]    ".blue(), 10),
             };
             
-            // Format: [Severity] name...................status
-            // Calculate padding to align status at column 65
             let base_len = prefix_len + 1 + check.name.len();
             let dots_count = if base_len < 60 { 60 - base_len } else { 1 };
             let dots = ".".repeat(dots_count);
@@ -231,17 +211,17 @@ fn main() -> Result<()> {
         ExecutionResult::Continue => {
             if executor.tests_run > 0 {
                 println!("{} {} {}", 
-                    "✓".green().bold(), 
+                    "".green().bold(), 
                     "Passed".green().bold(),
                     format!("{} checks", executor.tests_run).dimmed()
                 );
             } else {
-                println!("{} {}", "✓".green().bold(), "No checks to run".dimmed());
+                println!("{} {}", "".green().bold(), "No checks to run".dimmed());
             }
             std::process::exit(0);
         }
         ExecutionResult::Blocked => {
-            println!("{} {}", "✗".red().bold(), "Hook blocked".red().bold());
+            println!("{} {}", "x".red().bold(), "Hook blocked".red().bold());
             std::process::exit(1);
         }
         ExecutionResult::Break | ExecutionResult::ContinueLoop => {
@@ -418,7 +398,6 @@ fn list_packages() -> Result<()> {
 }
 
 fn get_git_files(hook_type: &str) -> Result<Vec<String>> {
-    // For pre-commit, get staged files
     if hook_type == "pre-commit" {
         let output = Command::new("git")
             .args(["diff", "--cached", "--name-only", "--diff-filter=ACM"])
@@ -438,7 +417,6 @@ fn get_git_files(hook_type: &str) -> Result<Vec<String>> {
         return Ok(files);
     }
     
-    // For other hooks, get all tracked files
     let output = Command::new("git")
         .args(["ls-files"])
         .output()
@@ -457,18 +435,11 @@ fn get_git_files(hook_type: &str) -> Result<Vec<String>> {
     Ok(files)
 }
 
-#[allow(dead_code)]
-fn validate_config(_statements: &[githook_syntax::ast::Statement], _config_path: &Path) -> Result<()> {
-    // V2: Simplified validation - parser already handles most errors
-    // TODO: Add semantic validation for groups, etc.
-    Ok(())
-}
-
 fn init_config() -> Result<()> {
     let config_path = PathBuf::from(".githookrc");
     
     if config_path.exists() {
-        println!("{} Config file already exists at {}", "✓".green().bold(), config_path.display());
+        println!("{} Config file already exists at {}", "".green().bold(), config_path.display());
         return Ok(());
     }
     
@@ -498,7 +469,7 @@ cache = true
     fs::write(&config_path, default_config)
         .with_context(|| format!("Failed to write config to {:?}", config_path))?;
     
-    println!("{} Created config file: {}", "✓".green().bold(), config_path.display());
+    println!("{} Created config file: {}", "".green().bold(), config_path.display());
     Ok(())
 }
 
@@ -508,10 +479,9 @@ fn init_hooks() -> Result<()> {
     if !hooks_dir.exists() {
         fs::create_dir(&hooks_dir)
             .with_context(|| format!("Failed to create directory {:?}", hooks_dir))?;
-        println!("{} Created directory: {}", "✓".green().bold(), hooks_dir.display());
+        println!("{} Created directory: {}", "".green().bold(), hooks_dir.display());
     }
     
-    // Create example pre-commit hook
     let pre_commit_path = hooks_dir.join("pre-commit.ghook");
     if !pre_commit_path.exists() {
         let example_hook = r#"# Example pre-commit hook
@@ -531,10 +501,10 @@ group "lint" {
 "#;
         fs::write(&pre_commit_path, example_hook)
             .with_context(|| format!("Failed to write hook to {:?}", pre_commit_path))?;
-        println!("{} Created example hook: {}", "✓".green().bold(), pre_commit_path.display());
+        println!("{} Created example hook: {}", "".green().bold(), pre_commit_path.display());
     }
     
-    println!("\n{} Githook initialized!", "✓".green().bold());
+    println!("\n{} Githook initialized!", "".green().bold());
     println!("  Edit {} to customize your hooks", pre_commit_path.display());
     println!("  Run {} to create a config file", "githook init --config".cyan());
     
