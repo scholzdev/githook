@@ -38,8 +38,16 @@ impl Parser {
     fn expect(&mut self, expected: Token) -> Result<Span> {
         match self.advance() {
             Some(st) if st.token == expected => Ok(st.span),
-            Some(st) => bail!("Expected {:?}, got {:?} at {:?}", expected, st.token, st.span),
-            None => bail!("Expected {:?}, got EOF", expected),
+            Some(st) => {
+                let expected_str = expected.display_name();
+                let found_str = st.token.display_name();
+                bail!("expected {}, got {} at line {}, column {}", 
+                    expected_str, found_str, st.span.line, st.span.col)
+            }
+            None => {
+                let expected_str = expected.display_name();
+                bail!("expected {}, got end of file", expected_str)
+            }
         }
     }
 
@@ -246,7 +254,7 @@ impl Parser {
                 }
                 Token::LeftParen => {
                     if let Expression::Identifier(name, id_span) = expr {
-                        self.advance(); // consume '('
+                        self.advance();
                         
                         let mut args = Vec::new();
                         

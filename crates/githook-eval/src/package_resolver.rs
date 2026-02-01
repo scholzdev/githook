@@ -87,11 +87,10 @@ pub fn load_package(
 ) -> Result<String> {
     let cache_key = format!("{}::{}", namespace, name);
     
-    if let Ok(mut cache) = PACKAGE_CACHE.lock() {
-        if let Some(cached_content) = cache.get(&cache_key) {
+    if let Ok(mut cache) = PACKAGE_CACHE.lock()
+        && let Some(cached_content) = cache.get(&cache_key) {
             return Ok(cached_content.clone());
         }
-    }
     
     let path = resolve_package_path(namespace, name)?;
     let etag_path = path.with_extension("etag");

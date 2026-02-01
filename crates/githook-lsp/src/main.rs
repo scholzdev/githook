@@ -17,12 +17,12 @@ mod folding;
 mod codelens;
 mod semantic_tokens;
 mod documentlinks;
+mod ast_utils;
 
 use backend::GithookLanguageServer;
 
 #[tokio::main]
 async fn main() {
-    // Initialize tracing for logging
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .with_writer(std::io::stderr)

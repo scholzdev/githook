@@ -8,7 +8,6 @@ pub fn get_completions(doc: &DocumentState, position: Position) -> Vec<Completio
     if let Some(context) = get_context(doc, position) {
         match context {
             GithookCompletionContext::MacroCall(namespace) => {
-                // Extract macros from AST
                 if let Some(ast) = &doc.ast {
                     for stmt in ast {
                         if let githook_syntax::ast::Statement::MacroDef { name, params, .. } = stmt {
@@ -29,7 +28,6 @@ pub fn get_completions(doc: &DocumentState, position: Position) -> Vec<Completio
                     }
                 }
                 
-                // Add known package namespaces if completing after @
                 if namespace.is_none() {
                     for (pkg, desc) in &[
                         ("git", "Git utilities package"),
@@ -50,7 +48,6 @@ pub fn get_completions(doc: &DocumentState, position: Position) -> Vec<Completio
                 return get_property_completions(&prefix);
             }
             GithookCompletionContext::ImportPath => {
-                // Suggest local .ghook files
                 completions.push(CompletionItem {
                     label: "./helpers.ghook".to_string(),
                     kind: Some(CompletionItemKind::FILE),
@@ -66,7 +63,6 @@ pub fn get_completions(doc: &DocumentState, position: Position) -> Vec<Completio
                 return completions;
             }
             GithookCompletionContext::UsePath => {
-                // Suggest known packages
                 for (pkg, desc) in &[
                     ("@preview/git", "Git utilities package"),
                     ("@preview/security", "Security checks package"),
@@ -125,21 +121,18 @@ pub fn get_completions(doc: &DocumentState, position: Position) -> Vec<Completio
 #[derive(Debug, PartialEq)]
 enum GithookCompletionContext {
     Normal,
-    MacroCall(Option<String>), // Optional namespace for @namespace.
+    MacroCall(Option<String>),
     PropertyAccess(String),
-    ImportPath,  // After import "
-    UsePath,     // After use "@
+    ImportPath,
+    UsePath,
 }
 
-/// Infer the type of a local variable by scanning Let statements before the cursor
 fn infer_variable_type(doc: &DocumentState, var_name: &str, _current_line: usize) -> Option<String> {
     let ast = doc.ast.as_ref()?;
     
-    // Scan all statements before current line
     for stmt in ast {
         if let Statement::Let { name, value, .. } = stmt
             && name == var_name {
-                // Found the variable declaration, infer its type
                 return infer_let_value_type(value);
             }
     }
@@ -147,7 +140,6 @@ fn infer_variable_type(doc: &DocumentState, var_name: &str, _current_line: usize
     None
 }
 
-/// Infer the type from a LetValue
 fn infer_let_value_type(value: &LetValue) -> Option<String> {
     match value {
         LetValue::String(_) => Some("string".to_string()),
@@ -157,7 +149,6 @@ fn infer_let_value_type(value: &LetValue) -> Option<String> {
     }
 }
 
-/// Infer the type from an Expression
 fn infer_expression_type(expr: &Expression) -> Option<String> {
     match expr {
         Expression::String(_, _) => Some("string".to_string()),
@@ -165,26 +156,19 @@ fn infer_expression_type(expr: &Expression) -> Option<String> {
         Expression::Bool(_, _) => Some("bool".to_string()),
         Expression::Array(_, _) => Some("array".to_string()),
         Expression::PropertyAccess { chain, .. } => {
-            // Try to infer the final type from a property chain
-            // For example: git.branch.name -> String
             infer_property_chain_type(chain)
         }
         Expression::MethodCall { method, .. } => {
-            // Try to infer the return type of a method call
             infer_method_return_type(method)
         }
         _ => None,
     }
 }
 
-/// Infer the type of a property access chain (e.g., git.branch.name)
 fn infer_property_chain_type(_chain: &[String]) -> Option<String> {
-    // Simple heuristic: many properties return strings
-    // This could be more sophisticated by tracking known property types
     Some("string".to_string())
 }
 
-/// Infer the return type of a method call
 fn infer_method_return_type(method: &str) -> Option<String> {
     match method {
         "upper" | "lower" | "trim" | "reverse" | "replace" => Some("string".to_string()),
@@ -210,19 +194,15 @@ fn get_context(doc: &DocumentState, position: Position) -> Option<GithookComplet
         return Some(GithookCompletionContext::Normal);
     }
     
-    // Use char indices instead of byte indices for proper Unicode handling
     let before_cursor: String = line.chars().take(char_idx).collect();
     
     if let Some(dot_pos) = before_cursor.rfind('.') {
         let before_dot = &before_cursor[..dot_pos];
         
-        // Check if the thing before the dot is a string literal
         if before_dot.trim_end().ends_with('"') || before_dot.trim_end().ends_with('}') {
-            // It's a string literal or interpolation, return string methods
             return Some(GithookCompletionContext::PropertyAccess("string".to_string()));
         }
         
-        // Find the identifier before the dot
         let ident_start = before_dot.rfind(|c: char| {
             c.is_whitespace() || "({[,=!<>".contains(c)
         }).map(|pos| pos + 1).unwrap_or(0);
@@ -230,7 +210,6 @@ fn get_context(doc: &DocumentState, position: Position) -> Option<GithookComplet
         let prefix = &before_dot[ident_start..].trim();
         
         if !prefix.is_empty() {
-            // Check if it's a local variable with known type
             if let Some(var_type) = infer_variable_type(doc, prefix, line_idx) {
                 return Some(GithookCompletionContext::PropertyAccess(var_type));
             }
@@ -239,7 +218,6 @@ fn get_context(doc: &DocumentState, position: Position) -> Option<GithookComplet
         }
     }
     
-    // Check for macro call: @macro or @namespace.
     if let Some(at_pos) = before_cursor.rfind('@') {
         let after_at = &before_cursor[at_pos + 1..];
         if let Some(dot_pos) = after_at.find('.') {
@@ -250,12 +228,10 @@ fn get_context(doc: &DocumentState, position: Position) -> Option<GithookComplet
         }
     }
     
-    // Check for import path: import "
     if before_cursor.contains("import") && before_cursor.trim_end().ends_with('"') {
         return Some(GithookCompletionContext::ImportPath);
     }
     
-    // Check for use path: use "@
     if before_cursor.contains("use") && before_cursor.contains("\"@") {
         return Some(GithookCompletionContext::UsePath);
     }
@@ -347,20 +323,23 @@ fn get_property_completions(prefix: &str) -> Vec<CompletionItem> {
             ("filename", "String - Filename"),
             ("join(suffix)", "String - Join path segments"),
         ],
-        // String literal detection - when prefix is "string" return string methods
+        p if p.contains("response") || p == "resp" || p == "gh" || p == "r" => &[
+            ("status", "Number - HTTP status code (e.g. 200, 404)"),
+            ("ok", "bool - Whether status is 2xx success"),
+            ("body", "String - Response body as text"),
+            ("header(name)", "String - Get response header by name"),
+            ("json()", "Object - Parse body as JSON"),
+        ],
         "string" => {
             return get_string_method_completions();
         },
         _ => {
-            // Check if it's a string variable/property
             if prefix.contains("name") || prefix.contains("message") || prefix.contains("email") || prefix.contains("url") {
                 return get_string_method_completions();
             }
-            // Check if it's a number
             if prefix.contains("size") || prefix.contains("count") || prefix.contains("length") {
                 return get_number_method_completions();
             }
-            // Check if it's an array
             if prefix.contains("files") || prefix.contains("array") {
                 return get_array_method_completions();
             }

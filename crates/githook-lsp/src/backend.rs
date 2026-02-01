@@ -20,10 +20,8 @@ use crate::codelens::get_code_lens;
 use crate::semantic_tokens::{get_legend, get_semantic_tokens};
 use crate::documentlinks::get_document_links;
 
-/// Main LSP backend for Githook language
 pub struct GithookLanguageServer {
     client: Client,
-    /// Store document contents and parsed ASTs
     documents: Arc<RwLock<HashMap<String, DocumentState>>>,
 }
 
@@ -38,7 +36,6 @@ impl GithookLanguageServer {
     async fn update_document(&self, uri: Url, text: String) {
         let state = DocumentState::new(text.clone(), Some(uri.as_ref()));
         
-        // Parse and generate diagnostics
         let diagnostics = state.diagnostics().unwrap_or_default();
         publish_diagnostics(&self.client, uri.clone(), diagnostics).await;
         
@@ -170,8 +167,6 @@ impl LanguageServer for GithookLanguageServer {
         let documents = self.documents.read().await;
         if let Some(doc) = documents.get(uri.as_str())
             && let Some(location) = get_definition(doc, position, uri.as_str()) {
-                // Update the URI in case it's a cross-file definition
-                // (get_definition now returns the correct URI)
                 return Ok(Some(GotoDefinitionResponse::Scalar(location)));
             }
         
@@ -201,7 +196,6 @@ impl LanguageServer for GithookLanguageServer {
         let documents = self.documents.read().await;
         if let Some(doc) = documents.get(uri.as_str()) {
             let mut refs = find_references(doc, position, include_declaration);
-            // Update URIs
             for loc in &mut refs {
                 loc.uri = uri.clone();
             }
@@ -273,7 +267,7 @@ impl LanguageServer for GithookLanguageServer {
                     
                     code_lens.command = Some(Command {
                         title: message,
-                        command: "".to_string(), // Empty command - not clickable
+                        command: "".to_string(),
                         arguments: None,
                     });
                 }

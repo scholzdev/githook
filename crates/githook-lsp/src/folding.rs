@@ -1,7 +1,6 @@
 use tower_lsp::lsp_types::*;
 use githook_syntax::Statement;
 
-/// Get folding ranges for code blocks
 pub fn get_folding_ranges(ast: &Option<Vec<Statement>>) -> Vec<FoldingRange> {
     let mut ranges = Vec::new();
     
@@ -18,7 +17,6 @@ fn collect_folding_ranges(stmt: &Statement, ranges: &mut Vec<FoldingRange>) {
     match stmt {
         Statement::MacroDef { span, body, .. } => {
             if !body.is_empty() {
-                // Find the end line by getting the max span from body
                 let end_line = body.iter()
                     .filter_map(get_statement_span)
                     .map(|s| s.line)
@@ -35,7 +33,6 @@ fn collect_folding_ranges(stmt: &Statement, ranges: &mut Vec<FoldingRange>) {
                 });
             }
             
-            // Recursively fold inner blocks
             for inner_stmt in body {
                 collect_folding_ranges(inner_stmt, ranges);
             }

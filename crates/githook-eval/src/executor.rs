@@ -94,8 +94,8 @@ impl Executor {
             }
             
             Expression::MethodCall { receiver, method, args, span: _ } => {
-                if let Expression::Identifier(name, _) = receiver.as_ref() {
-                    if self.builtins.has(name) {
+                if let Expression::Identifier(name, _) = receiver.as_ref()
+                    && self.builtins.has(name) {
                         let arg_values: Result<Vec<Value>> = args.iter()
                             .map(|a| self.eval_expression(a))
                             .collect();
@@ -105,7 +105,6 @@ impl Executor {
                             return Ok(result);
                         }
                     }
-                }
                 
                 let obj_value = self.eval_expression(receiver)?;
                 
@@ -317,12 +316,8 @@ impl Executor {
                     Value::Object(obj) => {
                         if let Some(path_ctx) = &obj.path_context {
                             path_ctx.to_string()
-                        } else if let Some(name_prop) = obj.properties.get("name") {
-                            if let Value::String(s) = name_prop {
-                                s.clone()
-                            } else {
-                                format!("{}({})", obj.type_name, obj.properties.len())
-                            }
+                        } else if let Some(Value::String(s)) = obj.properties.get("name") {
+                            s.clone()
                         } else {
                             format!("{}({})", obj.type_name, obj.properties.len())
                         }
@@ -421,7 +416,6 @@ impl Executor {
                     self.blocks.push(msg);
                     self.tests_run += 1;
                     if interactive.is_some() {
-                        // TODO: Interactive prompts
                     }
                     return Ok(ExecutionResult::Blocked);
                 }
@@ -511,11 +505,10 @@ impl Executor {
                 let statements = githook_syntax::parser::parse(tokens)
                     .with_context(|| format!("Failed to parse import file: {}", path))?;
                 
-                if let Some(alias_name) = alias {
-                    if self.verbose {
+                if let Some(alias_name) = alias
+                    && self.verbose {
                         println!("Importing '{}' as '{}'", path, alias_name);
                     }
-                }
                 
                 self.execute_statements(&statements)
             }
@@ -589,7 +582,6 @@ impl Executor {
             }
             
             Statement::Try { body, catch_var, catch_body, span: _ } => {
-                // Execute try body
                 let result = self.execute_statements(body);
                 
                 match result {

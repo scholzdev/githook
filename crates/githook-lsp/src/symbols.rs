@@ -5,34 +5,38 @@ use crate::document::DocumentState;
 pub fn get_document_symbols(_doc: &DocumentState) -> Vec<DocumentSymbol> {
     let mut symbols = Vec::new();
     
-    // TODO: Extract macro definitions and imports from AST
+    // Extract macro definitions from AST
+    let macros = _doc.ast.as_ref()
+        .map(|ast| crate::ast_utils::extract_macros(ast))
+        .unwrap_or_default();
+    
     // Add macro definitions
-    for (name, span, _body) in &[] as &[(String, githook_syntax::Span, Vec<githook_syntax::ast::Statement>)] {
+    for macro_info in &macros {
         #[allow(deprecated)]
         let symbol = DocumentSymbol {
-            name: name.clone(),
-            detail: Some("macro".to_string()),
+            name: macro_info.name.clone(),
+            detail: Some(format!("macro({})", macro_info.params.join(", "))),
             kind: SymbolKind::FUNCTION,
             tags: None,
             deprecated: None,
             range: Range {
                 start: Position {
-                    line: (span.line - 1) as u32,
-                    character: (span.col - 1) as u32,
+                    line: 0,
+                    character: 0,
                 },
                 end: Position {
-                    line: (span.line - 1) as u32,
-                    character: (span.col + name.len()) as u32,
+                    line: 0,
+                    character: macro_info.name.len() as u32,
                 },
             },
             selection_range: Range {
                 start: Position {
-                    line: (span.line - 1) as u32,
-                    character: (span.col - 1) as u32,
+                    line: 0,
+                    character: 0,
                 },
                 end: Position {
-                    line: (span.line - 1) as u32,
-                    character: (span.col + name.len()) as u32,
+                    line: 0,
+                    character: macro_info.name.len() as u32,
                 },
             },
             children: None,

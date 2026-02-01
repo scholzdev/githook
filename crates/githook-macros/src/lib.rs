@@ -212,14 +212,8 @@ pub fn callable_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 fn generate_conversion(return_type: &Type, call_expr: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
-    if is_bool_type(return_type) {
-        quote! { Ok(V::from(#call_expr)) }
-    } else if is_number_type(return_type) {
+    if is_number_type(return_type) {
         quote! { Ok(V::from(#call_expr as f64)) }
-    } else if is_string_type(return_type) {
-        quote! { Ok(V::from(#call_expr)) }
-    } else if is_vec_string_type(return_type) {
-        quote! { Ok(V::from(#call_expr)) }
     } else {
         quote! { Ok(V::from(#call_expr)) }
     }
@@ -265,22 +259,3 @@ fn is_number_type(ty: &Type) -> bool {
     false
 }
 
-fn is_string_type(ty: &Type) -> bool {
-    if let Type::Path(type_path) = ty
-        && let Some(segment) = type_path.path.segments.last() {
-            return segment.ident == "String";
-        }
-    false
-}
-
-fn is_vec_string_type(ty: &Type) -> bool {
-    if let Type::Path(type_path) = ty
-        && let Some(segment) = type_path.path.segments.last()
-            && segment.ident == "Vec"
-                && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
-                    && let Some(syn::GenericArgument::Type(Type::Path(inner))) = args.args.first()
-                        && let Some(inner_seg) = inner.path.segments.last() {
-                            return inner_seg.ident == "String";
-                        }
-    false
-}

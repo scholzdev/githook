@@ -8,6 +8,7 @@ use crate::contexts::{
 };
 
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum Value {
     String(String),
     Number(f64),
@@ -254,8 +255,8 @@ impl Value {
                         && let Ok(value) = ctx.call_property(name) {
                             return Ok(value);
                         }
-                if obj.type_name == "FilesCollection" {
-                    if let Some(ctx) = &obj.files_context {
+                if obj.type_name == "FilesCollection"
+                    && let Some(ctx) = &obj.files_context {
                         match name {
                             "staged" => {
                                 let files: Vec<Value> = ctx.staged().iter()
@@ -296,7 +297,6 @@ impl Value {
                             _ => {}
                         }
                     }
-                }
                 if obj.type_name == "Branch"
                     && let Some(ctx) = &obj.branch_context
                         && let Ok(value) = ctx.call_property(name) {

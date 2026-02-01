@@ -2,29 +2,26 @@ use tower_lsp::lsp_types::*;
 use crate::document::DocumentState;
 use std::collections::HashMap;
 
-/// Get code lens (reference counts) for symbols
 pub fn get_code_lens(doc: &DocumentState, all_documents: &HashMap<String, DocumentState>, current_uri: &str) -> Vec<CodeLens> {
     let mut lenses = Vec::new();
     
-    // TODO: Extract macro definitions from AST
-    for (name, span, _body) in &[] as &[(String, githook_syntax::Span, Vec<githook_syntax::ast::Statement>)] {
-        // Count local references in current document
-        let local_count = doc.text.matches(&format!("@{}", name)).count();
+    let macros = doc.ast.as_ref()
+        .map(|ast| crate::ast_utils::extract_macros(ast))
+        .unwrap_or_default();
+    
+    for macro_info in &macros {
+        let local_count = doc.text.matches(&format!("@{}", macro_info.name)).count();
         
-        // Count cross-file references from documents that import this file
         let mut cross_file_count = 0;
         
-        // Extract namespace from imports that point to current file
         for (other_uri, other_doc) in all_documents.iter() {
             if other_uri == current_uri {
-                continue; // Skip current document
+                continue;
             }
             
-            // Check if this document imports the current file
             for (namespace, import_uri) in &[] as &[(String, String)] {
                 if import_uri == current_uri {
-                    // Count namespaced references like @namespace:macro_name
-                    let pattern = format!("@{}:{}", namespace, name);
+                    let pattern = format!("@{}:{}", namespace, macro_info.name);
                     cross_file_count += other_doc.text.matches(&pattern).count();
                 }
             }
@@ -35,18 +32,18 @@ pub fn get_code_lens(doc: &DocumentState, all_documents: &HashMap<String, Docume
         lenses.push(CodeLens {
             range: Range {
                 start: Position {
-                    line: (span.line - 1) as u32,
+                    line: 0,
                     character: 0,
                 },
                 end: Position {
-                    line: (span.line - 1) as u32,
-                    character: 0,
+                    line: 0,
+                    character: macro_info.name.len() as u32,
                 },
             },
-            command: None, // No command - just display reference count
+            command: None,
             data: Some(serde_json::json!({
                 "refCount": ref_count,
-                "macroName": name,
+                "macroName": macro_info.name,
             })),
         });
     }

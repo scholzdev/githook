@@ -878,7 +878,7 @@ impl ArrayContext {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct HttpContext;
 
 impl HttpContext {

@@ -2,7 +2,6 @@ use tower_lsp::lsp_types::*;
 use crate::document::DocumentState;
 use githook_syntax::{Statement, LetValue, ast::Expression};
 
-/// Provide inlay hints for type annotations
 pub fn get_inlay_hints(doc: &DocumentState, range: Range) -> Vec<InlayHint> {
     let mut hints = Vec::new();
     
@@ -18,12 +17,9 @@ pub fn get_inlay_hints(doc: &DocumentState, range: Range) -> Vec<InlayHint> {
 fn collect_hints(stmt: &Statement, source: &str, range: Range, hints: &mut Vec<InlayHint>) {
     match stmt {
         Statement::Let { name, value, span } => {
-            // Get the type from the value
             if let Some(inferred_type) = infer_let_type(value) {
-                // Convert byte offset to line and character position
                 let position = offset_to_position(source, span.start);
                 
-                // Find position after "let name"
                 let lines: Vec<&str> = source.lines().collect();
                 let line_idx = position.line as usize;
                 
@@ -33,15 +29,13 @@ fn collect_hints(stmt: &Statement, source: &str, range: Range, hints: &mut Vec<I
                 
                 let line = lines[line_idx];
                 
-                // Find position after variable name
                 if let Some(name_pos) = line.find(name) {
                     let hint_pos = name_pos + name.len();
                     let hint_position = Position {
                         line: line_idx as u32,
                         character: hint_pos as u32,
                     };
-                    
-                    // Check if position is in requested range
+
                     if hint_position.line < range.start.line || hint_position.line > range.end.line {
                         return;
                     }
@@ -60,7 +54,6 @@ fn collect_hints(stmt: &Statement, source: &str, range: Range, hints: &mut Vec<I
             }
         }
         
-        // Recurse into nested statements
         Statement::If { then_body, else_body, .. } => {
             for s in then_body {
                 collect_hints(s, source, range, hints);
@@ -111,7 +104,6 @@ fn collect_hints(stmt: &Statement, source: &str, range: Range, hints: &mut Vec<I
     }
 }
 
-/// Convert byte offset to LSP Position (line, character)
 fn offset_to_position(source: &str, offset: usize) -> Position {
     let mut line = 0;
     let mut character = 0;
@@ -131,7 +123,6 @@ fn offset_to_position(source: &str, offset: usize) -> Position {
     Position { line, character: character as u32 }
 }
 
-// Infer type from LetValue
 fn infer_let_type(value: &LetValue) -> Option<String> {
     match value {
         LetValue::String(_) => Some("String".to_string()),
@@ -141,7 +132,6 @@ fn infer_let_type(value: &LetValue) -> Option<String> {
     }
 }
 
-// Infer type from Expression
 fn infer_expr_type(expr: &Expression) -> Option<String> {
     match expr {
         Expression::String(_, _) => Some("String".to_string()),
@@ -151,12 +141,10 @@ fn infer_expr_type(expr: &Expression) -> Option<String> {
         Expression::Null(_) => Some("Null".to_string()),
         
         Expression::PropertyAccess { chain, .. } => {
-            // Try to infer from property chain
             if chain.is_empty() {
                 return None;
             }
             
-            // git.branch.name -> String
             if chain.len() >= 2 && chain[0] == "git" {
                 match chain[1].as_str() {
                     "branch" if chain.len() == 2 => Some("BranchInfo".to_string()),
@@ -167,7 +155,6 @@ fn infer_expr_type(expr: &Expression) -> Option<String> {
                     "diff" => Some("DiffCollection".to_string()),
                     "added_lines" | "removed_lines" => Some("Array<String>".to_string()),
                     _ if chain.len() >= 3 => {
-                        // git.branch.name, git.author.email etc -> String
                         Some("String".to_string())
                     }
                     _ => None,
@@ -178,13 +165,11 @@ fn infer_expr_type(expr: &Expression) -> Option<String> {
         }
         
         Expression::MethodCall { receiver, method, .. } => {
-            // Try to infer from method name
             match method.as_str() {
                 "upper" | "lower" | "trim" | "reverse" | "replace" => Some("String".to_string()),
                 "split" | "lines" => Some("Array<String>".to_string()),
                 "contains" | "starts_with" | "ends_with" => Some("Bool".to_string()),
                 "filter" | "map" => {
-                    // Try to preserve array type
                     infer_expr_type(receiver)
                 }
                 "first" | "last" => Some("String".to_string()),

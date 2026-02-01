@@ -2,7 +2,6 @@ use tower_lsp::lsp_types::*;
 use crate::document::DocumentState;
 use crate::references::find_references;
 
-/// Prepare rename operation (validate if renaming is allowed)
 pub fn prepare_rename(doc: &DocumentState, position: Position) -> Option<Range> {
     let line_idx = position.line as usize;
     let lines: Vec<&str> = doc.text.lines().collect();
@@ -18,7 +17,6 @@ pub fn prepare_rename(doc: &DocumentState, position: Position) -> Option<Range> 
         return None;
     }
     
-    // Find word boundaries
     let word_start = line[..char_idx].rfind(|c: char| !c.is_alphanumeric() && c != '_' && c != '@' && c != ':')
         .map(|p| p + 1)
         .unwrap_or(0);
@@ -28,9 +26,7 @@ pub fn prepare_rename(doc: &DocumentState, position: Position) -> Option<Range> 
     
     let word = &line[word_start..word_end];
     
-    // Only allow rename on macros
     if let Some(macro_ref) = word.strip_prefix('@') {
-        // Don't allow rename on namespaced macros (would need cross-file edit)
         if macro_ref.contains(':') {
             return None;
         }
@@ -50,16 +46,13 @@ pub fn prepare_rename(doc: &DocumentState, position: Position) -> Option<Range> 
     }
 }
 
-/// Execute rename operation
 pub fn execute_rename(doc: &DocumentState, position: Position, new_name: String) -> Option<WorkspaceEdit> {
-    // Find all references
     let locations = find_references(doc, position, true);
     
     if locations.is_empty() {
         return None;
     }
     
-    // Create text edits for all references
     let mut changes = std::collections::HashMap::new();
     let uri = locations[0].uri.clone();
     

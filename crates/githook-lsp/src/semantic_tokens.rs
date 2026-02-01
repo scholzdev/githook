@@ -1,7 +1,6 @@
 use tower_lsp::lsp_types::*;
 use githook_syntax::Statement;
 
-/// Semantic token legend
 pub fn get_legend() -> SemanticTokensLegend {
     SemanticTokensLegend {
         token_types: vec![
@@ -22,26 +21,21 @@ pub fn get_legend() -> SemanticTokensLegend {
     }
 }
 
-/// Get semantic tokens for AST-based syntax highlighting
 pub fn get_semantic_tokens(ast: &Option<Vec<Statement>>, text: &str) -> SemanticTokens {
     let mut tokens = Vec::new();
     
-    // Collect comments from text (since they're not in AST)
     collect_comments_raw(text, &mut tokens);
     
-    // Collect tokens from AST
     if let Some(statements) = ast {
         for stmt in statements {
             collect_tokens_raw(stmt, &mut tokens);
         }
     }
     
-    // Sort by line, then by column
     tokens.sort_by(|a, b| {
         a.line.cmp(&b.line).then(a.start.cmp(&b.start))
     });
     
-    // Build semantic tokens with delta encoding
     let mut builder = SemanticTokensBuilder::new();
     for token in tokens {
         builder.push(token.line, token.start, token.length, token.token_type, token.modifiers);
@@ -61,7 +55,6 @@ struct RawToken {
 
 fn collect_comments_raw(text: &str, tokens: &mut Vec<RawToken>) {
     for (line_idx, line) in text.lines().enumerate() {
-        // Single-line comments: # ...
         if let Some(pos) = line.find('#') {
             let comment_len = line.len() - pos;
             tokens.push(RawToken {
@@ -74,7 +67,6 @@ fn collect_comments_raw(text: &str, tokens: &mut Vec<RawToken>) {
         }
     }
     
-    // Handle multi-line comments /* ... */
     let mut in_comment = false;
     let mut comment_start_line = 0;
     let mut comment_start_col = 0;
@@ -91,10 +83,8 @@ fn collect_comments_raw(text: &str, tokens: &mut Vec<RawToken>) {
                     comment_start_col = col;
                 }
             } else if col + 1 < chars.len() && chars[col] == '*' && chars[col + 1] == '/' {
-                // End of multi-line comment
                 let end_col = col + 2;
                 if comment_start_line == line_idx {
-                    // Single line
                     let length = end_col - comment_start_col;
                     tokens.push(RawToken {
                         line: line_idx as u32,
@@ -104,7 +94,6 @@ fn collect_comments_raw(text: &str, tokens: &mut Vec<RawToken>) {
                         modifiers: 0,
                     });
                 } else {
-                    // Multi-line: emit token for each line
                     for l in comment_start_line..=line_idx {
                         if l == comment_start_line {
                             let line_text = text.lines().nth(l).unwrap_or("");
@@ -146,7 +135,6 @@ fn collect_comments_raw(text: &str, tokens: &mut Vec<RawToken>) {
 fn collect_tokens_raw(stmt: &Statement, tokens: &mut Vec<RawToken>) {
     match stmt {
         Statement::MacroDef { name, span, body, .. } => {
-            // "macro" keyword (type 0)
             tokens.push(RawToken {
                 line: (span.line - 1) as u32,
                 start: (span.col - 1) as u32,
@@ -155,7 +143,6 @@ fn collect_tokens_raw(stmt: &Statement, tokens: &mut Vec<RawToken>) {
                 modifiers: 0,
             });
             
-            // Macro name (type 1 = function, modifier 2 = definition)
             tokens.push(RawToken {
                 line: (span.line - 1) as u32,
                 start: (span.col + 6) as u32,
@@ -170,7 +157,6 @@ fn collect_tokens_raw(stmt: &Statement, tokens: &mut Vec<RawToken>) {
         }
         Statement::MacroCall { name, namespace, span, .. } => {
             if let Some(ns) = namespace {
-                // Namespace (type 6)
                 tokens.push(RawToken {
                     line: (span.line - 1) as u32,
                     start: span.col as u32,
@@ -178,7 +164,6 @@ fn collect_tokens_raw(stmt: &Statement, tokens: &mut Vec<RawToken>) {
                     token_type: 6,
                     modifiers: 0,
                 });
-                // Macro name (type 1 = function)
                 tokens.push(RawToken {
                     line: (span.line - 1) as u32,
                     start: (span.col + ns.len() + 1) as u32,
@@ -187,7 +172,6 @@ fn collect_tokens_raw(stmt: &Statement, tokens: &mut Vec<RawToken>) {
                     modifiers: 0,
                 });
             } else {
-                // Macro name (type 1 = function)
                 tokens.push(RawToken {
                     line: (span.line - 1) as u32,
                     start: span.col as u32,
@@ -198,7 +182,6 @@ fn collect_tokens_raw(stmt: &Statement, tokens: &mut Vec<RawToken>) {
             }
         }
         Statement::Run { span, .. } => {
-            // "run" keyword
             tokens.push(RawToken {
                 line: (span.line - 1) as u32,
                 start: (span.col - 1) as u32,

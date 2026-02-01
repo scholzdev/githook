@@ -96,6 +96,70 @@ pub enum Token {
     Comment(String),
 }
 
+impl Token {
+    pub fn display_name(&self) -> String {
+        match self {
+            Token::Run => "keyword 'run'".to_string(),
+            Token::Print => "keyword 'print'".to_string(),
+            Token::Block => "keyword 'block'".to_string(),
+            Token::Warn => "keyword 'warn'".to_string(),
+            Token::Allow => "keyword 'allow'".to_string(),
+            Token::Parallel => "keyword 'parallel'".to_string(),
+            Token::Let => "keyword 'let'".to_string(),
+            Token::Foreach => "keyword 'foreach'".to_string(),
+            Token::If => "keyword 'if'".to_string(),
+            Token::Else => "keyword 'else'".to_string(),
+            Token::Match => "keyword 'match'".to_string(),
+            Token::Matching => "keyword 'matching'".to_string(),
+            Token::Try => "keyword 'try'".to_string(),
+            Token::Catch => "keyword 'catch'".to_string(),
+            Token::Break => "keyword 'break'".to_string(),
+            Token::Continue => "keyword 'continue'".to_string(),
+            Token::Macro => "keyword 'macro'".to_string(),
+            Token::Import => "keyword 'import'".to_string(),
+            Token::Use => "keyword 'use'".to_string(),
+            Token::Group => "keyword 'group'".to_string(),
+            Token::In => "keyword 'in'".to_string(),
+            Token::Not => "keyword 'not'".to_string(),
+            Token::And => "keyword 'and'".to_string(),
+            Token::Or => "keyword 'or'".to_string(),
+            Token::True => "keyword 'true'".to_string(),
+            Token::False => "keyword 'false'".to_string(),
+            Token::Null => "keyword 'null'".to_string(),
+            Token::Eq => "'=='".to_string(),
+            Token::Ne => "'!='".to_string(),
+            Token::Lt => "'<'".to_string(),
+            Token::Le => "'<='".to_string(),
+            Token::Gt => "'>'".to_string(),
+            Token::Ge => "'>='".to_string(),
+            Token::Plus => "'+'".to_string(),
+            Token::Minus => "'-'".to_string(),
+            Token::Star => "'*'".to_string(),
+            Token::Slash => "'/'".to_string(),
+            Token::Percent => "'%'".to_string(),
+            Token::Assign => "'='".to_string(),
+            Token::LeftBrace => "'{'".to_string(),
+            Token::RightBrace => "'}'".to_string(),
+            Token::LeftBracket => "'['".to_string(),
+            Token::RightBracket => "']'".to_string(),
+            Token::LeftParen => "'('".to_string(),
+            Token::RightParen => "')'".to_string(),
+            Token::Dot => "'.'".to_string(),
+            Token::Comma => "','".to_string(),
+            Token::Colon => "':'".to_string(),
+            Token::Arrow => "'->'".to_string(),
+            Token::FatArrow => "'=>'".to_string(),
+            Token::At => "'@'".to_string(),
+            Token::Dollar => "'$'".to_string(),
+            Token::Identifier(s) => format!("'{}'", s),
+            Token::String(s) => format!("string \"{}\"", s),
+            Token::Number(n) => format!("number {}", n),
+            Token::Newline => "newline".to_string(),
+            Token::Comment(_) => "comment".to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SpannedToken {
     pub token: Token,
@@ -103,7 +167,7 @@ pub struct SpannedToken {
 }
 
 pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
-    let mut tokens = Vec::with_capacity(input.len() / 4); // Estimate ~4 chars per token
+    let mut tokens = Vec::with_capacity(input.len() / 4);
     let mut chars = input.chars().peekable();
     
     let mut line = 1;
@@ -499,7 +563,7 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
             }
             
             _ if ch.is_alphabetic() || ch == '_' => {
-                let mut ident = String::with_capacity(16); // Pre-allocate reasonable size
+                let mut ident = String::with_capacity(16);
                 while let Some(&ch) = chars.peek() {
                     if ch.is_alphanumeric() || ch == '_' {
                         ident.push(ch);
@@ -510,10 +574,9 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                     }
                 }
                 
-                // Fast HashMap lookup instead of linear match
                 let token = KEYWORDS.get(ident.as_str())
                     .cloned()
-                    .unwrap_or_else(|| Token::Identifier(ident));
+                    .unwrap_or(Token::Identifier(ident));
                 
                 tokens.push(SpannedToken {
                     token,

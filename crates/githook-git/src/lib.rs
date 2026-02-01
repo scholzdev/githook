@@ -554,11 +554,10 @@ pub fn get_orig_head() -> Result<String> {
 
 pub fn get_merge_source_branch() -> Result<String> {
     if let Ok(merge_head) = get_merge_head() {
-        if let Ok(branches) = git_capture(&["branch", "-r", "--contains", &merge_head]) {
-            if let Some(first_branch) = branches.lines().next() {
+        if let Ok(branches) = git_capture(&["branch", "-r", "--contains", &merge_head])
+            && let Some(first_branch) = branches.lines().next() {
                 return Ok(first_branch.trim().trim_start_matches("origin/").to_string());
             }
-        }
         Ok(merge_head)
     } else {
         Ok("unknown".to_string())
