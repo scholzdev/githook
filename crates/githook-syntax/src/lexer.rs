@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use std::fmt;
 use once_cell::sync::Lazy;
 
-// Pre-computed keyword map for O(1) lookups instead of linear match
 static KEYWORDS: Lazy<HashMap<&'static str, Token>> = Lazy::new(|| {
     let mut m = HashMap::with_capacity(32);
     m.insert("run", Token::Run);

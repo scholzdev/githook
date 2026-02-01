@@ -245,8 +245,6 @@ impl Parser {
                     }
                 }
                 Token::LeftParen => {
-                    // Handle function calls like: file("path")
-                    // Convert to MethodCall with identifier as pseudo-receiver
                     if let Expression::Identifier(name, id_span) = expr {
                         self.advance(); // consume '('
                         
@@ -266,7 +264,6 @@ impl Parser {
                         let end_span = self.expect(Token::RightParen)?;
                         let span = id_span.merge(&end_span);
                         
-                        // Represent as MethodCall with Identifier as receiver
                         expr = Expression::MethodCall {
                             receiver: Box::new(Expression::Identifier(name.clone(), id_span)),
                             method: name,
@@ -346,7 +343,7 @@ impl Parser {
             
             Some(Token::LeftBracket) => {
                 let start_span = self.advance().unwrap().span;
-                let mut items = Vec::with_capacity(8); // Pre-allocate for typical arrays
+                let mut items = Vec::with_capacity(8);
                 
                 self.skip_newlines();
                 
@@ -382,7 +379,7 @@ impl Parser {
     }
     
     fn parse_interpolated_string(&mut self, s: String, span: Span) -> Result<Expression> {
-        let mut parts = Vec::with_capacity(4); // Pre-allocate for typical interpolations
+        let mut parts = Vec::with_capacity(4);
         let mut current = String::new();
         let mut chars = s.chars().peekable();
         
@@ -595,7 +592,7 @@ impl Parser {
         let start_span = self.expect(Token::Parallel)?;
         self.expect(Token::LeftBrace)?;
         
-        let mut commands = Vec::with_capacity(8); // Pre-allocate for typical parallel blocks
+        let mut commands = Vec::with_capacity(8);
         
         self.skip_newlines();
         
@@ -723,7 +720,7 @@ impl Parser {
         self.expect(Token::LeftBrace)?;
         self.skip_newlines();
         
-        let mut arms = Vec::with_capacity(4); // Pre-allocate for typical match arms
+        let mut arms = Vec::with_capacity(4);
         
         while !matches!(self.peek(), Some(Token::RightBrace)) {
             let arm = self.parse_match_arm()?;
@@ -824,7 +821,7 @@ impl Parser {
         
         let params = if matches!(self.peek(), Some(Token::LeftParen)) {
             self.advance();
-            let mut params = Vec::with_capacity(4); // Pre-allocate for typical macro params
+            let mut params = Vec::with_capacity(4);
             
             while !matches!(self.peek(), Some(Token::RightParen)) {
                 let param = match self.advance() {
@@ -974,7 +971,7 @@ impl Parser {
                 self.advance();
                 Some(Severity::Info)
             }
-            _ => Some(Severity::Critical), // Default to critical
+            _ => Some(Severity::Critical),
         };
         
         let enabled = if matches!(self.peek(), Some(Token::Identifier(id)) if id == "disabled") {
@@ -1001,7 +998,7 @@ impl Parser {
     }
     
     fn parse_body(&mut self) -> Result<Vec<Statement>> {
-        let mut statements = Vec::with_capacity(16); // Pre-allocate for typical blocks
+        let mut statements = Vec::with_capacity(16);
         
         self.skip_newlines();
         
@@ -1016,7 +1013,7 @@ impl Parser {
 
 pub fn parse(tokens: Vec<SpannedToken>) -> Result<Vec<Statement>> {
     let mut parser = Parser::new(tokens);
-    let mut statements = Vec::with_capacity(32); // Pre-allocate for typical programs
+    let mut statements = Vec::with_capacity(32);
     
     parser.skip_newlines();
     
