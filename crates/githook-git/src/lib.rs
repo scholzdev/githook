@@ -545,25 +545,20 @@ pub fn is_merge_commit() -> Result<bool> {
 }
 
 pub fn get_merge_head() -> Result<String> {
-    // Get the commit hash that was merged in (from MERGE_HEAD)
     git_capture(&["rev-parse", "MERGE_HEAD"])
 }
 
 pub fn get_orig_head() -> Result<String> {
-    // Get the commit hash before the merge (from ORIG_HEAD)
     git_capture(&["rev-parse", "ORIG_HEAD"])
 }
 
 pub fn get_merge_source_branch() -> Result<String> {
-    // Try to get the branch name from MERGE_HEAD
     if let Ok(merge_head) = get_merge_head() {
-        // Try to find which branch this commit belongs to
         if let Ok(branches) = git_capture(&["branch", "-r", "--contains", &merge_head]) {
             if let Some(first_branch) = branches.lines().next() {
                 return Ok(first_branch.trim().trim_start_matches("origin/").to_string());
             }
         }
-        // Fallback to commit hash
         Ok(merge_head)
     } else {
         Ok("unknown".to_string())
