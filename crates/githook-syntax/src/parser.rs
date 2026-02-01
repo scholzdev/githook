@@ -244,6 +244,39 @@ impl Parser {
                         expr = Expression::PropertyAccess { chain, span };
                     }
                 }
+                Token::LeftParen => {
+                    // Handle function calls like: file("path")
+                    // Convert to MethodCall with identifier as pseudo-receiver
+                    if let Expression::Identifier(name, id_span) = expr {
+                        self.advance(); // consume '('
+                        
+                        let mut args = Vec::new();
+                        
+                        while !matches!(self.peek(), Some(Token::RightParen)) {
+                            self.skip_newlines();
+                            args.push(self.parse_expression()?);
+                            
+                            if matches!(self.peek(), Some(Token::Comma)) {
+                                self.advance();
+                            } else {
+                                break;
+                            }
+                        }
+                        
+                        let end_span = self.expect(Token::RightParen)?;
+                        let span = id_span.merge(&end_span);
+                        
+                        // Represent as MethodCall with Identifier as receiver
+                        expr = Expression::MethodCall {
+                            receiver: Box::new(Expression::Identifier(name.clone(), id_span)),
+                            method: name,
+                            args,
+                            span,
+                        };
+                    } else {
+                        break;
+                    }
+                }
                 _ => break,
             }
         }
@@ -341,7 +374,10 @@ impl Parser {
                 Ok(expr)
             }
             
-            other => bail!("Unexpected token in expression: {:?}", other),
+            other => {
+                let token_str = other.as_ref().map(|t| t.to_string()).unwrap_or_else(|| "end of input".to_string());
+                bail!("Unexpected token in expression: {}", token_str)
+            }
         }
     }
     
@@ -417,7 +453,10 @@ impl Parser {
             Some(Token::Import) => self.parse_import(),
             Some(Token::Use) => self.parse_use(),
             Some(Token::Group) => self.parse_group(),
-            other => bail!("Unexpected token at statement level: {:?}", other),
+            other => {
+                let token_str = other.as_ref().map(|t| t.to_string()).unwrap_or_else(|| "end of input".to_string());
+                bail!("Unexpected token at statement level: {}", token_str)
+            }
         }
     }
     
@@ -935,10 +974,13 @@ impl Parser {
                 self.advance();
                 Some(Severity::Info)
             }
-            _ => None,
+            _ => Some(Severity::Critical), // Default to critical
         };
         
-        let enabled = if matches!(self.peek(), Some(Token::Identifier(id)) if id == "enabled") {
+        let enabled = if matches!(self.peek(), Some(Token::Identifier(id)) if id == "disabled") {
+            self.advance();
+            false
+        } else if matches!(self.peek(), Some(Token::Identifier(id)) if id == "enabled") {
             self.advance();
             true
         } else {

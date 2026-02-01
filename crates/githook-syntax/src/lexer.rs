@@ -1,5 +1,6 @@
 use crate::error::{Span, LexError};
 use std::collections::HashMap;
+use std::fmt;
 use once_cell::sync::Lazy;
 
 // Pre-computed keyword map for O(1) lookups instead of linear match
@@ -532,4 +533,68 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
     }
     
     Ok(tokens)
+}
+
+impl fmt::Display for Token {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Token::Run => write!(f, "run"),
+            Token::Print => write!(f, "print"),
+            Token::Block => write!(f, "block"),
+            Token::Warn => write!(f, "warn"),
+            Token::Allow => write!(f, "allow"),
+            Token::Parallel => write!(f, "parallel"),
+            Token::Let => write!(f, "let"),
+            Token::Foreach => write!(f, "foreach"),
+            Token::If => write!(f, "if"),
+            Token::Else => write!(f, "else"),
+            Token::Match => write!(f, "match"),
+            Token::Matching => write!(f, "matching"),
+            Token::Try => write!(f, "try"),
+            Token::Catch => write!(f, "catch"),
+            Token::Break => write!(f, "break"),
+            Token::Continue => write!(f, "continue"),
+            Token::Macro => write!(f, "macro"),
+            Token::Import => write!(f, "import"),
+            Token::Use => write!(f, "use"),
+            Token::Group => write!(f, "group"),
+            Token::In => write!(f, "in"),
+            Token::Not => write!(f, "not"),
+            Token::And => write!(f, "and"),
+            Token::Or => write!(f, "or"),
+            Token::True => write!(f, "true"),
+            Token::False => write!(f, "false"),
+            Token::Null => write!(f, "null"),
+            Token::Eq => write!(f, "=="),
+            Token::Ne => write!(f, "!="),
+            Token::Lt => write!(f, "<"),
+            Token::Le => write!(f, "<="),
+            Token::Gt => write!(f, ">"),
+            Token::Ge => write!(f, ">="),
+            Token::Plus => write!(f, "+"),
+            Token::Minus => write!(f, "-"),
+            Token::Star => write!(f, "*"),
+            Token::Slash => write!(f, "/"),
+            Token::Percent => write!(f, "%"),
+            Token::Assign => write!(f, "="),
+            Token::LeftBrace => write!(f, "{{"),
+            Token::RightBrace => write!(f, "}}"),
+            Token::LeftBracket => write!(f, "["),
+            Token::RightBracket => write!(f, "]"),
+            Token::LeftParen => write!(f, "("),
+            Token::RightParen => write!(f, ")"),
+            Token::Dot => write!(f, "."),
+            Token::Comma => write!(f, ","),
+            Token::Colon => write!(f, ":"),
+            Token::Arrow => write!(f, "->"),
+            Token::FatArrow => write!(f, "=>"),
+            Token::At => write!(f, "@"),
+            Token::Dollar => write!(f, "$"),
+            Token::Identifier(s) => write!(f, "{}", s),
+            Token::String(s) => write!(f, "\"{}\"", s),
+            Token::Number(n) => write!(f, "{}", n),
+            Token::Newline => write!(f, "newline"),
+            Token::Comment(s) => write!(f, "# {}", s),
+        }
+    }
 }

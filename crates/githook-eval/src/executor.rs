@@ -5,11 +5,31 @@ use rayon::prelude::*;
 
 use crate::value::{Value, Object};
 use crate::contexts::GitContext;
-use githook_syntax::ast::{Statement, Expression, BinaryOp, UnaryOp, MatchPattern};
+use crate::builtins::BuiltinRegistry;
+use githook_syntax::ast::{Statement, Expression, BinaryOp, UnaryOp, MatchPattern, Severity};
 
 // Use FxHashMap for string-keyed maps (identifiers, variable names)
 type VariableMap = FxHashMap<String, Value>;
 type MacroMap = FxHashMap<String, (Vec<String>, Vec<Statement>)>;
+
+// ============================================================================
+// CHECK TRACKING
+// ============================================================================
+
+#[derive(Debug, Clone)]
+pub enum CheckStatus {
+    Passed,
+    Skipped,
+    Failed,
+}
+
+#[derive(Debug, Clone)]
+pub struct CheckResult {
+    pub name: String,
+    pub status: CheckStatus,
+    pub reason: Option<String>,
+    pub severity: Severity,
+}
 
 // ============================================================================
 // EXECUTOR V2 - Expression evaluation and statement execution
@@ -40,6 +60,12 @@ pub struct Executor {
     
     /// Namespaced macro definitions (namespace::name -> (params, body))
     namespaced_macros: MacroMap,
+    
+    /// Check results for structured output
+    pub check_results: Vec<CheckResult>,
+    
+    /// Built-in function registry
+    builtins: BuiltinRegistry,
 }
 
 impl Executor {
@@ -53,6 +79,8 @@ impl Executor {
             tests_run: 0,
             macros: FxHashMap::default(),
             namespaced_macros: FxHashMap::default(),
+            check_results: Vec::new(),
+            builtins: BuiltinRegistry::new(),
         }
     }
     
@@ -63,6 +91,11 @@ impl Executor {
     
     pub fn set_variable(&mut self, name: String, value: Value) {
         self.variables.insert(name, value);
+    }
+    
+    /// Add a check result for structured output
+    pub fn add_check(&mut self, name: String, status: CheckStatus, reason: Option<String>, severity: Severity) {
+        self.check_results.push(CheckResult { name, status, reason, severity });
     }
     
     // ========================================================================
@@ -95,6 +128,22 @@ impl Executor {
             }
             
             Expression::MethodCall { receiver, method, args, span: _ } => {
+                // Check if this is a built-in function call (e.g., file("path"))
+                if let Expression::Identifier(name, _) = receiver.as_ref() {
+                    if self.builtins.has(name) {
+                        // Evaluate arguments
+                        let arg_values: Result<Vec<Value>> = args.iter()
+                            .map(|a| self.eval_expression(a))
+                            .collect();
+                        let arg_values = arg_values?;
+                        
+                        // Call built-in function
+                        if let Some(result) = self.builtins.call(name, &arg_values)? {
+                            return Ok(result);
+                        }
+                    }
+                }
+                
                 let obj_value = self.eval_expression(receiver)?;
                 
                 // Special handling for methods that accept closures
@@ -600,24 +649,29 @@ impl Executor {
             }
             
             Statement::Group { name, severity, enabled, body, span: _ } => {
+                let sev = severity.as_ref().unwrap_or(&Severity::Critical);
+                
                 if !enabled {
-                    if self.verbose {
-                        println!("⏭️  Group '{}' is disabled, skipping", name);
-                    }
+                    self.add_check(name.clone(), CheckStatus::Skipped, Some("disabled".to_string()), sev.clone());
                     return Ok(ExecutionResult::Continue);
                 }
                 
-                if self.verbose {
-                    let sev = severity.as_ref()
-                        .map(|s| format!(" [{:?}]", s))
-                        .unwrap_or_default();
-                    println!("--- Group: {}{} ---", name, sev);
+                // Try to execute the group body
+                let result = self.execute_statements(body);
+                
+                match result {
+                    Ok(exec_result) => {
+                        // Check if the group had any actual work (look for tests_run before/after)
+                        // For now, mark as Passed
+                        self.add_check(name.clone(), CheckStatus::Passed, None, sev.clone());
+                        Ok(exec_result)
+                    }
+                    Err(e) => {
+                        // Group failed
+                        self.add_check(name.clone(), CheckStatus::Failed, Some(e.to_string()), sev.clone());
+                        Err(e)
+                    }
                 }
-                let result = self.execute_statements(body)?;
-                if self.verbose {
-                    println!("--- End: {} ---", name);
-                }
-                Ok(result)
             }
             
             Statement::Try { body, catch_var, catch_body, span: _ } => {
@@ -628,10 +682,9 @@ impl Executor {
                     Ok(exec_result) => Ok(exec_result),
                     Err(e) => {
                         // Error occurred, execute catch body
-                        if let Some(var_name) = catch_var {
-                            // Bind error message to variable
-                            self.variables.insert(var_name.clone(), Value::String(e.to_string()));
-                        }
+                        // Bind error message to variable (use explicit name or default to "error")
+                        let var_name = catch_var.as_ref().map(|s| s.as_str()).unwrap_or("error");
+                        self.variables.insert(var_name.to_string(), Value::String(e.to_string()));
                         
                         // Execute catch body
                         self.execute_statements(catch_body)
@@ -645,8 +698,8 @@ impl Executor {
         let items = match collection {
             Value::Array(arr) => arr,
             Value::Object(obj) if obj.type_name == "Git" => {
-                // git.all_files
-                if let Some(Value::Array(files)) = obj.get("all_files") {
+                // git.all_files or git.files.staged
+                if let Some(Value::Array(files)) = obj.get("files") {
                     files
                 } else {
                     return Ok(ExecutionResult::Continue);
@@ -834,17 +887,67 @@ impl Executor {
         let mut git = Object::new("Git")
             .with_git_context(git_context.clone());
         
-        // all_files array
-        let all_files: Vec<Value> = git_context.all_files.iter()
-            .map(|path| Value::file_object(path.clone()))
-            .collect();
-        git.set("all_files", Value::Array(all_files));
+        // files object with staged and all arrays
+        let mut files_obj = Object::new("FilesCollection")
+            .with_files_context(git_context.files.clone());
         
-        // staged_files array
-        let staged_files: Vec<Value> = git_context.staged_files.iter()
+        let all_files: Vec<Value> = git_context.files.all.iter()
             .map(|path| Value::file_object(path.clone()))
             .collect();
-        git.set("staged_files", Value::Array(staged_files));
+        files_obj.set("all", Value::Array(all_files));
+        
+        let staged_files: Vec<Value> = git_context.files.staged.iter()
+            .map(|path| Value::file_object(path.clone()))
+            .collect();
+        files_obj.set("staged", Value::Array(staged_files));
+        
+        let modified_files: Vec<Value> = git_context.files.modified.iter()
+            .map(|path| Value::file_object(path.clone()))
+            .collect();
+        files_obj.set("modified", Value::Array(modified_files));
+        
+        let added_files: Vec<Value> = git_context.files.added.iter()
+            .map(|path| Value::file_object(path.clone()))
+            .collect();
+        files_obj.set("added", Value::Array(added_files));
+        
+        let deleted_files: Vec<Value> = git_context.files.deleted.iter()
+            .map(|path| Value::file_object(path.clone()))
+            .collect();
+        files_obj.set("deleted", Value::Array(deleted_files));
+        
+        let unstaged_files: Vec<Value> = git_context.files.unstaged.iter()
+            .map(|path| Value::file_object(path.clone()))
+            .collect();
+        files_obj.set("unstaged", Value::Array(unstaged_files));
+        
+        git.set("files", Value::Object(files_obj));
+        
+        // diff object with added/removed lines
+        let mut diff_obj = Object::new("DiffCollection");
+        
+        let added_lines: Vec<Value> = git_context.diff.added_lines.iter()
+            .map(|line| Value::String(line.clone()))
+            .collect();
+        diff_obj.set("added_lines", Value::Array(added_lines));
+        
+        let removed_lines: Vec<Value> = git_context.diff.removed_lines.iter()
+            .map(|line| Value::String(line.clone()))
+            .collect();
+        diff_obj.set("removed_lines", Value::Array(removed_lines));
+        
+        git.set("diff", Value::Object(diff_obj));
+        
+        // merge object with source and target
+        let mut merge_obj = Object::new("MergeContext");
+        
+        let merge_source = githook_git::get_merge_source_branch().unwrap_or_else(|_| "unknown".to_string());
+        let merge_target = githook_git::get_branch_name().unwrap_or_else(|_| "unknown".to_string());
+        
+        merge_obj.set("source", Value::String(merge_source));
+        merge_obj.set("target", Value::String(merge_target));
+        
+        git.set("merge", Value::Object(merge_obj));
         
         // branch object with context
         let branch = Object::new("Branch")

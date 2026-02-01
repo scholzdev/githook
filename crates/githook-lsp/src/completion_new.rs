@@ -44,7 +44,7 @@ pub fn get_completions(doc: &DocumentState, position: Position) -> Vec<Completio
         });
     }
 
-    for label in &["git", "true", "false", "null"] {
+    for label in &["git", "env", "file", "dir", "glob", "exec", "true", "false", "null"] {
         completions.push(CompletionItem {
             label: label.to_string(),
             kind: Some(CompletionItemKind::CONSTANT),
@@ -104,8 +104,8 @@ fn get_property_completions(prefix: &str) -> Vec<CompletionItem> {
     
     let properties: &[(&str, &str)] = match prefix {
         "git" => &[
-            ("staged_files", "Staged files array"),
-            ("all_files", "All files array"),
+            ("files", "Files collection"),
+            ("diff", "Diff collection"),
             ("branch", "Branch object"),
             ("commit", "Commit object"),
             ("author", "Author object"),
@@ -113,6 +113,22 @@ fn get_property_completions(prefix: &str) -> Vec<CompletionItem> {
             ("stats", "Stats object"),
             ("is_merge_commit", "Boolean"),
             ("has_conflicts", "Boolean"),
+        ],
+        "git.files" | "files" => &[
+            ("staged", "Staged files"),
+            ("all", "All files"),
+            ("modified", "Modified files"),
+            ("added", "Added files"),
+            ("deleted", "Deleted files"),
+            ("unstaged", "Unstaged files"),
+        ],
+        "git.diff" | "diff" => &[
+            ("added_lines", "Added lines"),
+            ("removed_lines", "Removed lines"),
+        ],
+        "git.merge" | "merge" => &[
+            ("source", "Source branch/commit of the merge"),
+            ("target", "Target branch of the merge"),
         ],
         "git.branch" | "branch" => &[("name", "Branch name")],
         "git.commit" | "commit" => &[("message", "Commit message"), ("hash", "Commit hash")],

@@ -206,11 +206,12 @@ fn get_context(doc: &DocumentState, position: Position) -> Option<GithookComplet
     let line = lines[line_idx];
     let char_idx = position.character as usize;
     
-    if char_idx == 0 || char_idx > line.len() {
+    if char_idx == 0 {
         return Some(GithookCompletionContext::Normal);
     }
     
-    let before_cursor = &line[..char_idx];
+    // Use char indices instead of byte indices for proper Unicode handling
+    let before_cursor: String = line.chars().take(char_idx).collect();
     
     if let Some(dot_pos) = before_cursor.rfind('.') {
         let before_dot = &before_cursor[..dot_pos];
@@ -226,7 +227,7 @@ fn get_context(doc: &DocumentState, position: Position) -> Option<GithookComplet
             c.is_whitespace() || "({[,=!<>".contains(c)
         }).map(|pos| pos + 1).unwrap_or(0);
         
-        let prefix = before_dot[ident_start..].trim();
+        let prefix = &before_dot[ident_start..].trim();
         
         if !prefix.is_empty() {
             // Check if it's a local variable with known type
@@ -267,8 +268,8 @@ fn get_property_completions(prefix: &str) -> Vec<CompletionItem> {
     
     let properties: &[(&str, &str)] = match prefix {
         "git" => &[
-            ("staged_files", "Array<File> - Staged files"),
-            ("all_files", "Array<File> - All files"),
+            ("files", "FilesCollection - File collections"),
+            ("diff", "DiffCollection - Diff lines"),
             ("branch", "BranchInfo - Current branch"),
             ("commit", "CommitInfo - Commit info"),
             ("author", "AuthorInfo - Author details"),
@@ -276,6 +277,22 @@ fn get_property_completions(prefix: &str) -> Vec<CompletionItem> {
             ("stats", "DiffStats - Diff statistics"),
             ("is_merge_commit", "bool - Is merge commit"),
             ("has_conflicts", "bool - Has conflicts"),
+        ],
+        "git.files" | "files" => &[
+            ("staged", "Array<File> - Staged files"),
+            ("all", "Array<File> - All tracked files"),
+            ("modified", "Array<File> - Modified files"),
+            ("added", "Array<File> - Added files"),
+            ("deleted", "Array<File> - Deleted files"),
+            ("unstaged", "Array<File> - Unstaged files"),
+        ],
+        "git.diff" | "diff" => &[
+            ("added_lines", "Array<String> - Added lines"),
+            ("removed_lines", "Array<String> - Removed lines"),
+        ],
+        "git.merge" | "merge" => &[
+            ("source", "String - Source branch/commit of the merge"),
+            ("target", "String - Target branch of the merge"),
         ],
         "git.branch" | "branch" => &[
             ("name", "String - Branch name"),

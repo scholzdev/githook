@@ -3,7 +3,8 @@ use ahash::{HashMap, HashMapExt};
 use crate::contexts::{
     StringContext, NumberContext, ArrayContext,
     FileContext, PathContext,
-    GitContext, BranchInfo, CommitInfo, AuthorInfo, RemoteInfo, DiffStats
+    GitContext, BranchInfo, CommitInfo, AuthorInfo, RemoteInfo, DiffStats, FilesCollection,
+    HttpResponseContext,
 };
 
 #[derive(Debug, Clone)]
@@ -24,6 +25,7 @@ pub struct Object {
     pub file_context: Option<FileContext>,
     pub path_context: Option<PathContext>,
     pub git_context: Option<GitContext>,
+    pub files_context: Option<FilesCollection>,
     pub branch_context: Option<BranchInfo>,
     pub commit_context: Option<CommitInfo>,
     pub author_context: Option<AuthorInfo>,
@@ -32,6 +34,7 @@ pub struct Object {
     pub string_context: Option<StringContext>,
     pub number_context: Option<NumberContext>,
     pub array_context: Option<ArrayContext>,
+    pub http_response_context: Option<HttpResponseContext>,
 }
 
 impl Object {
@@ -42,6 +45,7 @@ impl Object {
             file_context: None,
             path_context: None,
             git_context: None,
+            files_context: None,
             branch_context: None,
             commit_context: None,
             author_context: None,
@@ -50,6 +54,7 @@ impl Object {
             string_context: None,
             number_context: None,
             array_context: None,
+            http_response_context: None,
         }
     }
     
@@ -73,6 +78,11 @@ impl Object {
         self
     }
     
+    pub fn with_files_context(mut self, ctx: FilesCollection) -> Self {
+        self.files_context = Some(ctx);
+        self
+    }
+    
     pub fn with_branch_context(mut self, ctx: BranchInfo) -> Self {
         self.branch_context = Some(ctx);
         self
@@ -90,6 +100,11 @@ impl Object {
     
     pub fn with_remote_context(mut self, ctx: RemoteInfo) -> Self {
         self.remote_context = Some(ctx);
+        self
+    }
+    
+    pub fn with_http_response_context(mut self, ctx: HttpResponseContext) -> Self {
+        self.http_response_context = Some(ctx);
         self
     }
     
@@ -232,6 +247,50 @@ impl Value {
                         && let Ok(value) = ctx.call_property(name) {
                             return Ok(value);
                         }
+                if obj.type_name == "FilesCollection" {
+                    // FilesCollection doesn't use callable_impl, access properties directly
+                    if let Some(ctx) = &obj.files_context {
+                        match name {
+                            "staged" => {
+                                let files: Vec<Value> = ctx.staged().iter()
+                                    .map(|path| Value::file_object(path.clone()))
+                                    .collect();
+                                return Ok(Value::Array(files));
+                            }
+                            "all" => {
+                                let files: Vec<Value> = ctx.all().iter()
+                                    .map(|path| Value::file_object(path.clone()))
+                                    .collect();
+                                return Ok(Value::Array(files));
+                            }
+                            "modified" => {
+                                let files: Vec<Value> = ctx.modified().iter()
+                                    .map(|path| Value::file_object(path.clone()))
+                                    .collect();
+                                return Ok(Value::Array(files));
+                            }
+                            "added" => {
+                                let files: Vec<Value> = ctx.added().iter()
+                                    .map(|path| Value::file_object(path.clone()))
+                                    .collect();
+                                return Ok(Value::Array(files));
+                            }
+                            "deleted" => {
+                                let files: Vec<Value> = ctx.deleted().iter()
+                                    .map(|path| Value::file_object(path.clone()))
+                                    .collect();
+                                return Ok(Value::Array(files));
+                            }
+                            "unstaged" => {
+                                let files: Vec<Value> = ctx.unstaged().iter()
+                                    .map(|path| Value::file_object(path.clone()))
+                                    .collect();
+                                return Ok(Value::Array(files));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
                 if obj.type_name == "Branch"
                     && let Some(ctx) = &obj.branch_context
                         && let Ok(value) = ctx.call_property(name) {
@@ -269,6 +328,11 @@ impl Value {
                         }
                 if obj.type_name == "Array"
                     && let Some(ctx) = &obj.array_context
+                        && let Ok(value) = ctx.call_property(name) {
+                            return Ok(value);
+                        }
+                if obj.type_name == "HttpResponse"
+                    && let Some(ctx) = &obj.http_response_context
                         && let Ok(value) = ctx.call_property(name) {
                             return Ok(value);
                         }
@@ -345,6 +409,23 @@ impl Value {
                 ctx.call_method(name, &str_refs)
             } else {
                 bail!("Path object has no context")
+            }
+        }
+        else if obj.type_name == "HttpResponse" {
+            if let Some(ctx) = &obj.http_response_context {
+                // Special case for json() method
+                if name == "json" && args.is_empty() {
+                    return Ok(ctx.json_parsed());
+                }
+                
+                let string_args: Result<Vec<String>> = args.iter()
+                    .map(|v| v.as_string())
+                    .collect();
+                let string_args = string_args?;
+                let str_refs: Vec<&str> = string_args.iter().map(|s| s.as_str()).collect();
+                ctx.call_method(name, &str_refs)
+            } else {
+                bail!("HttpResponse object has no context")
             }
         } 
         else {
@@ -439,6 +520,14 @@ impl Value {
         Value::Object(
             Object::new("Path")
                 .with_path_context(path_ctx)
+        )
+    }
+    
+    pub fn http_response_object(status: u16, body: String, headers: std::collections::HashMap<String, String>) -> Value {
+        let response_ctx = crate::contexts::HttpResponseContext::new(status, body, headers);
+        Value::Object(
+            Object::new("HttpResponse")
+                .with_http_response_context(response_ctx)
         )
     }
 }

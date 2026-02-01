@@ -20,95 +20,85 @@
       "example": "print my_array.sum",
       "name": "array.sum"
     },
-    "contains": {
-      "description": "Checks if the string contains a substring",
-      "example": "\"hello world\".contains(\"world\") // true",
-      "name": "contains"
-    },
-    "created_time": {
-      "description": "Creation time of the file as a UNIX timestamp",
-      "example": "print file.created_time",
-      "name": "created_time"
-    },
-    "ends_with": {
-      "description": "Checks if the string ends with a suffix",
-      "example": "\"hello world\".ends_with(\"world\") // true",
-      "name": "ends_with"
-    },
     "exists": {
       "description": "Checks if the file exists",
       "example": "if file.exists { print \"File exists\" }",
       "name": "exists"
     },
-    "is_absolute": {
+    "file.created_time": {
+      "description": "Creation time of the file as a UNIX timestamp",
+      "example": "print file.created_time",
+      "name": "file.created_time"
+    },
+    "file.ends_with": {
+      "description": "Checks if the file path ends with a suffix",
+      "example": "if file.path.ends_with(\".rs\") { print \"Rust source file\" }",
+      "name": "file.ends_with"
+    },
+    "file.is_absolute": {
       "description": "Checks if the path is absolute",
       "example": "if file.is_absolute { print \"Absolute path\" }",
-      "name": "is_absolute"
+      "name": "file.is_absolute"
     },
-    "is_dir": {
+    "file.is_dir": {
       "description": "Checks if the path is a directory",
       "example": "if file.is_dir { print \"It's a directory\" }",
-      "name": "is_dir"
+      "name": "file.is_dir"
     },
-    "is_empty": {
-      "description": "Checks if the string is empty",
-      "example": "\"\".is_empty // true",
-      "name": "is_empty"
-    },
-    "is_file": {
+    "file.is_file": {
       "description": "Checks if the path is a file",
       "example": "if file.is_file { print \"It's a file\" }",
-      "name": "is_file"
+      "name": "file.is_file"
     },
-    "is_hidden": {
+    "file.is_hidden": {
       "description": "Checks if the file is hidden",
       "example": "if file.is_hidden { print \"Hidden file\" }",
-      "name": "is_hidden"
+      "name": "file.is_hidden"
     },
-    "is_readable": {
+    "file.is_readable": {
       "description": "Checks if the file is readable",
       "example": "if file.is_readable { print \"File is readable\" }",
-      "name": "is_readable"
+      "name": "file.is_readable"
     },
-    "is_relative": {
+    "file.is_relative": {
       "description": "Checks if the path is relative",
       "example": "if file.is_relative { print \"Relative path\" }",
-      "name": "is_relative"
+      "name": "file.is_relative"
     },
-    "is_symlink": {
+    "file.is_symlink": {
       "description": "Checks if the file is a symbolic link",
       "example": "if file.is_symlink { print \"It's a symlink\" }",
-      "name": "is_symlink"
+      "name": "file.is_symlink"
     },
-    "is_writable": {
+    "file.is_writable": {
       "description": "Checks if the file is writable",
       "example": "if file.is_writable { print \"File is writable\" }",
-      "name": "is_writable"
+      "name": "file.is_writable"
+    },
+    "file.modified_time": {
+      "description": "Last modified time of the file as a UNIX timestamp",
+      "example": "print file.modified_time",
+      "name": "file.modified_time"
+    },
+    "file.permissions": {
+      "description": "File permissions (Unix only)",
+      "example": "print file.permissions",
+      "name": "file.permissions"
+    },
+    "file.readable": {
+      "description": "Checks if the file is readable",
+      "example": "if file.readable { print \"File is readable\" }",
+      "name": "file.readable"
+    },
+    "file.starts_with": {
+      "description": "Checks if the file path starts with a prefix",
+      "example": "if file.path.starts_with(\"src/\") { print \"In src directory\" }",
+      "name": "file.starts_with"
     },
     "join": {
       "description": "Joins path components",
       "example": "file.path.join(\"subdir\")",
       "name": "join"
-    },
-    "len": {
-      "description": "Returns the length of the string",
-      "example": "\"hello\".len // 5",
-      "name": "len"
-    },
-    "lines": {
-      "description": "Splits the string into lines",
-      "example": "\"line1\\nline2\".lines // [\"line1\", \"line2\"]",
-      "name": "lines"
-    },
-    "matches": {
-      "description": "Checks if the string matches a regex pattern",
-      "example": "\"hello123\".matches(\"^hello\\\\d+$\") // true",
-      "name": "matches"
-    },
-    "modified_time": {
-      "description": "Last modified time of the file as a UNIX timestamp",
-      "example": "print file.modified_time",
-      "name": "modified_time"
     },
     "number.abs": {
       "description": "Absolute value of the number",
@@ -160,50 +150,75 @@
       "example": "print 0.0.tan() // 0",
       "name": "number.tan"
     },
-    "permissions": {
-      "description": "File permissions (Unix only)",
-      "example": "print file.permissions",
-      "name": "permissions"
+    "response.header": {
+      "description": "Get response header by name",
+      "example": "print response.header(\"content-type\")",
+      "name": "response.header"
     },
-    "readable": {
-      "description": "Checks if the file is readable",
-      "example": "if file.readable { print \"File is readable\" }",
-      "name": "readable"
+    "string.contains": {
+      "description": "Checks if the string contains a substring",
+      "example": "\"hello world\".contains(\"world\") // true",
+      "name": "string.contains"
     },
-    "replace": {
+    "string.ends_with": {
+      "description": "Checks if the string ends with a suffix",
+      "example": "\"hello world\".ends_with(\"world\") // true",
+      "name": "string.ends_with"
+    },
+    "string.is_empty": {
+      "description": "Checks if the string is empty",
+      "example": "\"\".is_empty // true",
+      "name": "string.is_empty"
+    },
+    "string.len": {
+      "description": "Returns the length of the string",
+      "example": "\"hello\".len // 5",
+      "name": "string.len"
+    },
+    "string.lines": {
+      "description": "Splits the string into lines",
+      "example": "\"line1\\nline2\".lines // [\"line1\", \"line2\"]",
+      "name": "string.lines"
+    },
+    "string.matches": {
+      "description": "Checks if the string matches a regex pattern",
+      "example": "\"hello123\".matches(\"^hello\\\\d+$\") // true",
+      "name": "string.matches"
+    },
+    "string.replace": {
       "description": "Replaces occurrences of a substring with another",
       "example": "\"hello world\".replace(\"world\", \"there\") // \"hello there\"",
-      "name": "replace"
+      "name": "string.replace"
     },
-    "reverse": {
+    "string.reverse": {
       "description": "Reverses the string",
       "example": "\"hello\".reverse // \"olleh\"",
-      "name": "reverse"
+      "name": "string.reverse"
     },
-    "split": {
+    "string.split": {
       "description": "Splits the string by a delimiter",
       "example": "\"a,b,c\".split(\",\") // [\"a\", \"b\", \"c\"]",
-      "name": "split"
+      "name": "string.split"
     },
-    "starts_with": {
+    "string.starts_with": {
       "description": "Checks if the string starts with a prefix",
       "example": "\"hello world\".starts_with(\"hello\") // true",
-      "name": "starts_with"
+      "name": "string.starts_with"
     },
-    "to_lowercase": {
+    "string.to_lowercase": {
       "description": "Converts string to lowercase",
       "example": "\"HELLO\".to_lowercase() // \"hello\"",
-      "name": "to_lowercase"
+      "name": "string.to_lowercase"
     },
-    "to_uppercase": {
+    "string.to_uppercase": {
       "description": "Converts string to uppercase",
       "example": "\"hello\".to_uppercase() // \"HELLO\"",
-      "name": "to_uppercase"
+      "name": "string.to_uppercase"
     },
-    "trim": {
+    "string.trim": {
       "description": "Removes leading and trailing whitespace",
       "example": "\"  hello  \".trim // \"hello\"",
-      "name": "trim"
+      "name": "string.trim"
     }
   },
   "properties": {
@@ -216,6 +231,16 @@
       "description": "Base name of the file without extension",
       "example": "print file.basename",
       "name": "file.basename"
+    },
+    "file.content": {
+      "description": "Content of the file as a string",
+      "example": "if file.content.contains(\"TODO\") { warn \"TODO found\" }",
+      "name": "file.content"
+    },
+    "file.diff": {
+      "description": "Staged diff for this file",
+      "example": "if file.diff.contains(\"TODO\") { warn \"TODO in diff\" }",
+      "name": "file.diff"
     },
     "file.dirname": {
       "description": "Directory name of the file",
@@ -307,11 +332,6 @@
       "example": "if git.branch.is_main { print \"On main branch\" }",
       "name": "is_main"
     },
-    "lower": {
-      "description": "Converts string to lowercase",
-      "example": "\"HELLO\".lower // \"hello\"",
-      "name": "lower"
-    },
     "path.basename": {
       "description": "Base name of the file without extension",
       "example": "print file.path.basename",
@@ -337,15 +357,35 @@
       "example": "print file.path.string",
       "name": "path.string"
     },
+    "response.body": {
+      "description": "Response body as string",
+      "example": "print response.body",
+      "name": "response.body"
+    },
+    "response.ok": {
+      "description": "Whether status is 2xx",
+      "example": "if response.ok { print \"Success\" }",
+      "name": "response.ok"
+    },
+    "response.status": {
+      "description": "HTTP status code",
+      "example": "if response.status == 200 { print \"OK\" }",
+      "name": "response.status"
+    },
     "string.length": {
       "description": "Length of the string",
       "example": "print \"hello\".length",
       "name": "string.length"
     },
-    "upper": {
+    "string.lower": {
+      "description": "Converts string to lowercase",
+      "example": "\"HELLO\".lower // \"hello\"",
+      "name": "string.lower"
+    },
+    "string.upper": {
       "description": "Converts string to uppercase",
       "example": "\"hello\".upper // \"HELLO\"",
-      "name": "upper"
+      "name": "string.upper"
     }
   }
 }

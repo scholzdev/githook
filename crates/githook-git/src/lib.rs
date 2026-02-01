@@ -166,6 +166,105 @@ pub fn is_file_staged(pattern: &str) -> Result<bool> {
     Ok(!files.is_empty())
 }
 
+pub fn get_added_files(pattern: &str) -> Result<Vec<String>> {
+    let output = git_capture(&["diff", "--cached", "--name-only", "--diff-filter=A"])?;
+    
+    let files: Vec<String> = output
+        .lines()
+        .filter(|f| !f.is_empty())
+        .map(|s| s.to_string())
+        .collect();
+    
+    if pattern == "*" {
+        return Ok(files);
+    }
+    
+    let patterns: Vec<&str> = pattern.split('|').collect();
+    
+    if patterns.len() == 1 {
+        let regex = get_glob_regex(pattern)?;
+        return Ok(files.into_iter().filter(|f| regex.is_match(f)).collect());
+    }
+    
+    let regexes: Result<Vec<Regex>> = patterns
+        .iter()
+        .map(|p| get_glob_regex(p.trim()))
+        .collect();
+    
+    let regexes = regexes?;
+    
+    Ok(files
+        .into_iter()
+        .filter(|f| regexes.iter().any(|r| r.is_match(f)))
+        .collect())
+}
+
+pub fn get_deleted_files(pattern: &str) -> Result<Vec<String>> {
+    let output = git_capture(&["diff", "--cached", "--name-only", "--diff-filter=D"])?;
+    
+    let files: Vec<String> = output
+        .lines()
+        .filter(|f| !f.is_empty())
+        .map(|s| s.to_string())
+        .collect();
+    
+    if pattern == "*" {
+        return Ok(files);
+    }
+    
+    let patterns: Vec<&str> = pattern.split('|').collect();
+    
+    if patterns.len() == 1 {
+        let regex = get_glob_regex(pattern)?;
+        return Ok(files.into_iter().filter(|f| regex.is_match(f)).collect());
+    }
+    
+    let regexes: Result<Vec<Regex>> = patterns
+        .iter()
+        .map(|p| get_glob_regex(p.trim()))
+        .collect();
+    
+    let regexes = regexes?;
+    
+    Ok(files
+        .into_iter()
+        .filter(|f| regexes.iter().any(|r| r.is_match(f)))
+        .collect())
+}
+
+pub fn get_unstaged_files(pattern: &str) -> Result<Vec<String>> {
+    let output = git_capture(&["diff", "--name-only", "--diff-filter=ACM"])?;
+    
+    let files: Vec<String> = output
+        .lines()
+        .filter(|f| !f.is_empty())
+        .map(|s| s.to_string())
+        .collect();
+    
+    if pattern == "*" {
+        return Ok(files);
+    }
+    
+    let patterns: Vec<&str> = pattern.split('|').collect();
+    
+    if patterns.len() == 1 {
+        let regex = get_glob_regex(pattern)?;
+        return Ok(files.into_iter().filter(|f| regex.is_match(f)).collect());
+    }
+    
+    let regexes: Result<Vec<Regex>> = patterns
+        .iter()
+        .map(|p| get_glob_regex(p.trim()))
+        .collect();
+    
+    let regexes = regexes?;
+    
+    Ok(files
+        .into_iter()
+        .filter(|f| regexes.iter().any(|r| r.is_match(f)))
+        .collect())
+}
+
 pub fn get_modified_files(pattern: &str) -> Result<Vec<String>> {
     let output = git_capture(&["diff", "--name-only", "--diff-filter=M", "HEAD"])?;
     
@@ -360,6 +459,10 @@ pub fn get_removed_lines_array() -> Result<Vec<String>> {
     Ok(removed_lines)
 }
 
+pub fn get_file_diff(path: &str) -> Result<String> {
+    git_capture(&["diff", "--cached", "--", path])
+}
+
 pub fn get_diff_stats() -> Result<DiffStats> {
     let head = git_capture(&["rev-parse", "HEAD"])?;
     let cache_key = format!("diff_stats:{}", head.trim());
@@ -439,6 +542,32 @@ pub fn get_staged_blob_oid(path: &str) -> Result<String> {
 pub fn is_merge_commit() -> Result<bool> {
     let output = git_capture(&["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]);
     Ok(output.is_ok())
+}
+
+pub fn get_merge_head() -> Result<String> {
+    // Get the commit hash that was merged in (from MERGE_HEAD)
+    git_capture(&["rev-parse", "MERGE_HEAD"])
+}
+
+pub fn get_orig_head() -> Result<String> {
+    // Get the commit hash before the merge (from ORIG_HEAD)
+    git_capture(&["rev-parse", "ORIG_HEAD"])
+}
+
+pub fn get_merge_source_branch() -> Result<String> {
+    // Try to get the branch name from MERGE_HEAD
+    if let Ok(merge_head) = get_merge_head() {
+        // Try to find which branch this commit belongs to
+        if let Ok(branches) = git_capture(&["branch", "-r", "--contains", &merge_head]) {
+            if let Some(first_branch) = branches.lines().next() {
+                return Ok(first_branch.trim().trim_start_matches("origin/").to_string());
+            }
+        }
+        // Fallback to commit hash
+        Ok(merge_head)
+    } else {
+        Ok("unknown".to_string())
+    }
 }
 
 pub fn has_merge_conflicts() -> Result<bool> {

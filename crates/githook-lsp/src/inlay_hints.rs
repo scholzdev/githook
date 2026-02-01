@@ -162,7 +162,10 @@ fn infer_expr_type(expr: &Expression) -> Option<String> {
                     "branch" if chain.len() == 2 => Some("BranchInfo".to_string()),
                     "author" if chain.len() == 2 => Some("AuthorInfo".to_string()),
                     "commit" if chain.len() == 2 => Some("CommitInfo".to_string()),
-                    "staged_files" | "all_files" => Some("Array<File>".to_string()),
+                    "files" => Some("FilesCollection".to_string()),
+                    "staged" | "all" | "modified" | "added" | "deleted" | "unstaged" => Some("Array<File>".to_string()),
+                    "diff" => Some("DiffCollection".to_string()),
+                    "added_lines" | "removed_lines" => Some("Array<String>".to_string()),
                     _ if chain.len() >= 3 => {
                         // git.branch.name, git.author.email etc -> String
                         Some("String".to_string())

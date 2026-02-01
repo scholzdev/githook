@@ -3,6 +3,74 @@ use std::{fmt, path::{Path, PathBuf}};
 use anyhow::Result;
 
 #[derive(Debug, Clone)]
+pub struct FilesCollection {
+    pub staged: Vec<String>,
+    pub all: Vec<String>,
+    pub modified: Vec<String>,
+    pub added: Vec<String>,
+    pub deleted: Vec<String>,
+    pub unstaged: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DiffCollection {
+    pub added_lines: Vec<String>,
+    pub removed_lines: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MergeContext {
+    pub source: String,
+    pub target: String,
+}
+
+impl FilesCollection {
+    pub fn staged(&self) -> Vec<String> {
+        self.staged.clone()
+    }
+
+    pub fn all(&self) -> Vec<String> {
+        self.all.clone()
+    }
+
+    pub fn modified(&self) -> Vec<String> {
+        self.modified.clone()
+    }
+
+    pub fn added(&self) -> Vec<String> {
+        self.added.clone()
+    }
+
+    pub fn deleted(&self) -> Vec<String> {
+        self.deleted.clone()
+    }
+
+    pub fn unstaged(&self) -> Vec<String> {
+        self.unstaged.clone()
+    }
+}
+
+impl DiffCollection {
+    pub fn added_lines(&self) -> Vec<String> {
+        self.added_lines.clone()
+    }
+    
+    pub fn removed_lines(&self) -> Vec<String> {
+        self.removed_lines.clone()
+    }
+}
+
+impl MergeContext {
+    pub fn source(&self) -> String {
+        self.source.clone()
+    }
+    
+    pub fn target(&self) -> String {
+        self.target.clone()
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct PathContext {
     path_buf: PathBuf,
 }
@@ -142,6 +210,20 @@ impl FileContext {
             .to_string()
     }
     
+    #[docs(name = "file.diff", description = "Staged diff for this file", example = "if file.diff.contains(\"TODO\") { warn \"TODO in diff\" }")]
+    #[property]
+    pub fn diff(&self) -> String {
+        githook_git::get_file_diff(&self.path.string())
+            .unwrap_or_default()
+    }
+    
+    #[docs(name = "file.content", description = "Content of the file as a string", example = "if file.content.contains(\"TODO\") { warn \"TODO found\" }")]
+    #[property]
+    pub fn content(&self) -> String {
+        std::fs::read_to_string(&self.path_buf)
+            .unwrap_or_default()
+    }
+    
     #[docs(name = "file.size", description = "Size of the file in bytes", example = "print file.size")]
     #[property]
     pub fn size(&self) -> f64 {
@@ -156,25 +238,25 @@ impl FileContext {
         self.path_buf.exists()
     }
     
-    #[docs(name = "is_file", description = "Checks if the path is a file", example = "if file.is_file { print \"It's a file\" }")]
+    #[docs(name = "file.is_file", description = "Checks if the path is a file", example = "if file.is_file { print \"It's a file\" }")]
     #[method]
     pub fn is_file(&self) -> bool {
         self.path_buf.is_file()
     }
     
-    #[docs(name = "is_dir", description = "Checks if the path is a directory", example = "if file.is_dir { print \"It's a directory\" }")]
+    #[docs(name = "file.is_dir", description = "Checks if the path is a directory", example = "if file.is_dir { print \"It's a directory\" }")]
     #[method]
     pub fn is_dir(&self) -> bool {
         self.path_buf.is_dir()
     }
 
-    #[docs(name = "is_readable", description = "Checks if the file is readable", example = "if file.is_readable { print \"File is readable\" }")]
+    #[docs(name = "file.is_readable", description = "Checks if the file is readable", example = "if file.is_readable { print \"File is readable\" }")]
     #[method]
     pub fn is_readable(&self) -> bool {
         self.path_buf.metadata().is_ok()
     }
     
-    #[docs(name = "is_writable", description = "Checks if the file is writable", example = "if file.is_writable { print \"File is writable\" }")]
+    #[docs(name = "file.is_writable", description = "Checks if the file is writable", example = "if file.is_writable { print \"File is writable\" }")]
     #[method]
     pub fn is_executable(&self) -> bool {
         #[cfg(unix)]
@@ -189,25 +271,25 @@ impl FileContext {
         false
     }
     
-    #[docs(name = "is_symlink", description = "Checks if the file is a symbolic link", example = "if file.is_symlink { print \"It's a symlink\" }")]
+    #[docs(name = "file.is_symlink", description = "Checks if the file is a symbolic link", example = "if file.is_symlink { print \"It's a symlink\" }")]
     #[method]
     pub fn is_symlink(&self) -> bool {
         self.path_buf.is_symlink()
     }
     
-    #[docs(name = "is_absolute", description = "Checks if the path is absolute", example = "if file.is_absolute { print \"Absolute path\" }")]
+    #[docs(name = "file.is_absolute", description = "Checks if the path is absolute", example = "if file.is_absolute { print \"Absolute path\" }")]
     #[method]
     pub fn is_absolute(&self) -> bool {
         self.path_buf.is_absolute()
     }
     
-    #[docs(name = "is_relative", description = "Checks if the path is relative", example = "if file.is_relative { print \"Relative path\" }")]
+    #[docs(name = "file.is_relative", description = "Checks if the path is relative", example = "if file.is_relative { print \"Relative path\" }")]
     #[method]
     pub fn is_relative(&self) -> bool {
         self.path_buf.is_relative()
     }
 
-    #[docs(name = "modified_time", description = "Last modified time of the file as a UNIX timestamp", example = "print file.modified_time")]
+    #[docs(name = "file.modified_time", description = "Last modified time of the file as a UNIX timestamp", example = "print file.modified_time")]
     #[method]
     pub fn modified_time(&self) -> u64 {
         self.path_buf
@@ -219,7 +301,7 @@ impl FileContext {
             .unwrap_or(0)
     }
 
-    #[docs(name = "created_time", description = "Creation time of the file as a UNIX timestamp", example = "print file.created_time")]
+    #[docs(name = "file.created_time", description = "Creation time of the file as a UNIX timestamp", example = "print file.created_time")]
     #[method]
     pub fn created_time(&self) -> u64 {
         self.path_buf
@@ -231,7 +313,7 @@ impl FileContext {
             .unwrap_or(0)
     }
 
-    #[docs(name = "is_hidden", description = "Checks if the file is hidden", example = "if file.is_hidden { print \"Hidden file\" }")]
+    #[docs(name = "file.is_hidden", description = "Checks if the file is hidden", example = "if file.is_hidden { print \"Hidden file\" }")]
     #[method]
     pub fn is_hidden(&self) -> bool {
         self.path_buf
@@ -241,7 +323,7 @@ impl FileContext {
             .unwrap_or(false)
     }
 
-    #[docs(name = "permissions", description = "File permissions (Unix only)", example = "print file.permissions")]
+    #[docs(name = "file.permissions", description = "File permissions (Unix only)", example = "print file.permissions")]
     #[method]
     pub fn permissions(&self) -> u32 {
         #[cfg(unix)]
@@ -255,19 +337,19 @@ impl FileContext {
         0
     }
     
-    #[docs(name = "readable", description = "Checks if the file is readable", example = "if file.readable { print \"File is readable\" }")]
+    #[docs(name = "file.readable", description = "Checks if the file is readable", example = "if file.readable { print \"File is readable\" }")]
     #[method]
     pub fn contains(&self, pattern: &str) -> bool {
         self.path.string().contains(pattern)
     }
-    
-    #[docs(name = "starts_with", description = "Checks if the file path starts with a prefix", example = "if file.path.starts_with(\"src/\") { print \"In src directory\" }")]
+
+    #[docs(name = "file.starts_with", description = "Checks if the file path starts with a prefix", example = "if file.path.starts_with(\"src/\") { print \"In src directory\" }")]
     #[method]
     pub fn starts_with(&self, prefix: &str) -> bool {
         self.path.string().starts_with(prefix)
     }
     
-    #[docs(name = "ends_with", description = "Checks if the file path ends with a suffix", example = "if file.path.ends_with(\".rs\") { print \"Rust source file\" }")]
+    #[docs(name = "file.ends_with", description = "Checks if the file path ends with a suffix", example = "if file.path.ends_with(\".rs\") { print \"Rust source file\" }")]
     #[method]
     pub fn ends_with(&self, suffix: &str) -> bool {
         self.path.string().ends_with(suffix)
@@ -281,8 +363,8 @@ pub struct GitContext {
     pub author: AuthorInfo,
     pub remote: RemoteInfo,
     pub stats: DiffStats,
-    pub staged_files: Vec<String>,
-    pub all_files: Vec<String>,
+    pub files: FilesCollection,
+    pub diff: DiffCollection,
     pub is_merge_commit: bool,
     pub has_conflicts: bool,
 }
@@ -345,8 +427,18 @@ impl GitContext {
                 additions: git_stats.additions,
                 deletions: git_stats.deletions,
             },
-            staged_files: githook_git::get_staged_files("*").unwrap_or_default(),
-            all_files: githook_git::get_all_files("*").unwrap_or_default(),
+            files: FilesCollection {
+                staged: githook_git::get_staged_files("*").unwrap_or_default(),
+                all: githook_git::get_all_files("*").unwrap_or_default(),
+                modified: githook_git::get_modified_files("*").unwrap_or_default(),
+                added: githook_git::get_added_files("*").unwrap_or_default(),
+                deleted: githook_git::get_deleted_files("*").unwrap_or_default(),
+                unstaged: githook_git::get_unstaged_files("*").unwrap_or_default(),
+            },
+            diff: DiffCollection {
+                added_lines: githook_git::get_added_lines_array().unwrap_or_default(),
+                removed_lines: githook_git::get_removed_lines_array().unwrap_or_default(),
+            },
             is_merge_commit: githook_git::is_merge_commit().unwrap_or(false),
             has_conflicts: false,
         }
@@ -482,79 +574,79 @@ impl StringContext {
         self.value.len() as f64
     }
     
-    #[docs(name = "upper", description = "Converts string to uppercase", example = "\"hello\".upper // \"HELLO\"")]
+    #[docs(name = "string.upper", description = "Converts string to uppercase", example = "\"hello\".upper // \"HELLO\"")]
     #[property]
     pub fn upper(&self) -> String {
         self.value.to_uppercase()
     }
 
-    #[docs(name = "lower", description = "Converts string to lowercase", example = "\"HELLO\".lower // \"hello\"")]
+    #[docs(name = "string.lower", description = "Converts string to lowercase", example = "\"HELLO\".lower // \"hello\"")]
     #[property]
     pub fn lower(&self) -> String {
         self.value.to_lowercase()
     }
 
-    #[docs(name = "reverse", description = "Reverses the string", example = "\"hello\".reverse // \"olleh\"")]
+    #[docs(name = "string.reverse", description = "Reverses the string", example = "\"hello\".reverse // \"olleh\"")]
     #[method]
     pub fn reverse(&self) -> String {
         self.value.chars().rev().collect()
     }
     
-    #[docs(name = "len", description = "Returns the length of the string", example = "\"hello\".len // 5")]
+    #[docs(name = "string.len", description = "Returns the length of the string", example = "\"hello\".len // 5")]
     #[method]
     pub fn len(&self) -> f64 {
         self.value.len() as f64
     }
     
-    #[docs(name = "is_empty", description = "Checks if the string is empty", example = "\"\".is_empty // true")]
+    #[docs(name = "string.is_empty", description = "Checks if the string is empty", example = "\"\".is_empty // true")]
     #[method]
     pub fn is_empty(&self) -> bool {
         self.value.is_empty()
     }
     
-    #[docs(name = "to_lowercase", description = "Converts string to lowercase", example = "\"HELLO\".to_lowercase() // \"hello\"")]
+    #[docs(name = "string.to_lowercase", description = "Converts string to lowercase", example = "\"HELLO\".to_lowercase() // \"hello\"")]
     #[method]
     pub fn to_lowercase(&self) -> String {
         self.value.to_lowercase()
     }
     
-    #[docs(name = "to_uppercase", description = "Converts string to uppercase", example = "\"hello\".to_uppercase() // \"HELLO\"")]
+    #[docs(name = "string.to_uppercase", description = "Converts string to uppercase", example = "\"hello\".to_uppercase() // \"HELLO\"")]
     #[method]
     pub fn to_uppercase(&self) -> String {
         self.value.to_uppercase()
     }
     
-    #[docs(name = "trim", description = "Removes leading and trailing whitespace", example = "\"  hello  \".trim // \"hello\"")]
+    #[docs(name = "string.trim", description = "Removes leading and trailing whitespace", example = "\"  hello  \".trim // \"hello\"")]
     #[method]
     pub fn trim(&self) -> String {
         self.value.trim().to_string()
     }
     
-    #[docs(name = "replace", description = "Replaces occurrences of a substring with another", example = "\"hello world\".replace(\"world\", \"there\") // \"hello there\"")]
+    #[docs(name = "string.replace", description = "Replaces occurrences of a substring with another", example = "\"hello world\".replace(\"world\", \"there\") // \"hello there\"")]
     #[method]
     pub fn replace(&self, from: &str, to: &str) -> String {
         self.value.replace(from, to)
     }
     
-    #[docs(name = "contains", description = "Checks if the string contains a substring", example = "\"hello world\".contains(\"world\") // true")]
+    #[docs(name = "string.contains", description = "Checks if the string contains a substring", example = "\"hello world\".contains(\"world\") // true")]
     #[method]
     pub fn contains(&self, needle: &str) -> bool {
         self.value.contains(needle)
     }
     
-    #[docs(name = "starts_with", description = "Checks if the string starts with a prefix", example = "\"hello world\".starts_with(\"hello\") // true")]
+    #[docs(name = "string.starts_with", description = "Checks if the string starts with a prefix", example = "\"hello world\".starts_with(\"hello\") // true")]
     #[method]
     pub fn starts_with(&self, prefix: &str) -> bool {
         self.value.starts_with(prefix)
     }
     
-    #[docs(name = "ends_with", description = "Checks if the string ends with a suffix", example = "\"hello world\".ends_with(\"world\") // true")]
+    #[docs(name = "string.ends_with", description = "Checks if the string ends with a suffix", example = "\"hello world\".ends_with(\"world\") // true")]
     #[method]
     pub fn ends_with(&self, suffix: &str) -> bool {
         self.value.ends_with(suffix)
     }
     
-    #[docs(name = "matches", description = "Checks if the string matches a regex pattern", example = "\"hello123\".matches(\"^hello\\\\d+$\") // true")]
+    #[docs(name = "string.matches", description = "Checks if the string matches a regex pattern", example = "\"hello123\".matches(\"^hello\\\\d+$\") // true")]
     #[method]
     pub fn matches(&self, pattern: &str) -> bool {
         regex::Regex::new(pattern)
@@ -562,7 +654,7 @@ impl StringContext {
             .unwrap_or(false)
     }
 
-    #[docs(name = "split", description = "Splits the string by a delimiter", example = "\"a,b,c\".split(\",\") // [\"a\", \"b\", \"c\"]")]
+    #[docs(name = "string.split", description = "Splits the string by a delimiter", example = "\"a,b,c\".split(\",\") // [\"a\", \"b\", \"c\"]")]
     #[method]
     pub fn split(&self, delimiter: &str) -> Vec<String> {
         self.value
@@ -571,7 +663,7 @@ impl StringContext {
             .collect()
     }
 
-    #[docs(name = "lines", description = "Splits the string into lines", example = "\"line1\\nline2\".lines // [\"line1\", \"line2\"]")]
+    #[docs(name = "string.lines", description = "Splits the string into lines", example = "\"line1\\nline2\".lines // [\"line1\", \"line2\"]")]
     #[method]
     pub fn lines(&self) -> Vec<String> {
         self.value
@@ -784,5 +876,85 @@ impl ArrayContext {
             }
         }
         Ok(Value::Bool(true))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct HttpResponseContext {
+    status: u16,
+    body: String,
+    headers: std::collections::HashMap<String, String>,
+}
+
+impl HttpResponseContext {
+    pub fn new(status: u16, body: String, headers: std::collections::HashMap<String, String>) -> Self {
+        Self { status, body, headers }
+    }
+}
+
+#[callable_impl]
+impl HttpResponseContext {
+    #[docs(name = "response.status", description = "HTTP status code", example = "if response.status == 200 { print \"OK\" }")]
+    #[property]
+    pub fn status(&self) -> f64 {
+        self.status as f64
+    }
+    
+    #[docs(name = "response.body", description = "Response body as string", example = "print response.body")]
+    #[property]
+    pub fn body(&self) -> String {
+        self.body.clone()
+    }
+    
+    #[docs(name = "response.ok", description = "Whether status is 2xx", example = "if response.ok { print \"Success\" }")]
+    #[property]
+    pub fn ok(&self) -> bool {
+        self.status >= 200 && self.status < 300
+    }
+    
+    #[docs(name = "response.header", description = "Get response header by name", example = "print response.header(\"content-type\")")]
+    #[method]
+    pub fn header(&self, name: &str) -> String {
+        self.headers.get(&name.to_lowercase())
+            .cloned()
+            .unwrap_or_default()
+    }
+}
+
+// Non-macro implementation for methods that return Value
+impl HttpResponseContext {
+    pub fn json_parsed(&self) -> crate::value::Value {
+        match serde_json::from_str::<serde_json::Value>(&self.body) {
+            Ok(parsed) => json_to_value(parsed),
+            Err(_) => crate::value::Value::Null,
+        }
+    }
+}
+
+fn json_to_value(json: serde_json::Value) -> crate::value::Value {
+    use crate::value::Value;
+    match json {
+        serde_json::Value::Null => Value::Null,
+        serde_json::Value::Bool(b) => Value::Bool(b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Value::Number(i as f64)
+            } else if let Some(f) = n.as_f64() {
+                Value::Number(f)
+            } else {
+                Value::Null
+            }
+        }
+        serde_json::Value::String(s) => Value::String(s),
+        serde_json::Value::Array(arr) => {
+            Value::Array(arr.into_iter().map(json_to_value).collect())
+        }
+        serde_json::Value::Object(obj) => {
+            let mut dict = crate::value::Object::new("Dict");
+            for (k, v) in obj {
+                dict.set(&k, json_to_value(v));
+            }
+            Value::Object(dict)
+        }
     }
 }

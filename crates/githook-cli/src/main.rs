@@ -169,10 +169,47 @@ fn main() -> Result<()> {
 
     // Print summary
     println!();
-    println!("{}", "═══ Summary ═══".cyan().bold());
     
-    if executor.tests_run == 0 && executor.blocks.is_empty() && executor.warnings.is_empty() {
-        println!("{}", "  No checks performed (empty repository or no staged files)".dimmed());
+    // Print all checks in structured format
+    if !executor.check_results.is_empty() {
+        for check in &executor.check_results {
+            let status_text: colored::ColoredString = match check.status {
+                githook_eval::CheckStatus::Passed => "Passed".green(),
+                githook_eval::CheckStatus::Skipped => "Skipped".cyan(),
+                githook_eval::CheckStatus::Failed => "Failed".red(),
+            };
+            
+            // Severity prefix in color, padded to same width
+            let (severity_prefix, prefix_len): (colored::ColoredString, usize) = match check.severity {
+                githook_syntax::ast::Severity::Critical => ("[Critical]".red(), 10),
+                githook_syntax::ast::Severity::Warning => ("[Warning] ".yellow(), 10),
+                githook_syntax::ast::Severity::Info => ("[Info]    ".blue(), 10),
+            };
+            
+            // Format: [Severity] name...................status
+            // Calculate padding to align status at column 65
+            let base_len = prefix_len + 1 + check.name.len();
+            let dots_count = if base_len < 60 { 60 - base_len } else { 1 };
+            let dots = ".".repeat(dots_count);
+            
+            if let Some(reason) = &check.reason {
+                println!("{} {}{}{}{}",
+                    severity_prefix,
+                    check.name,
+                    dots,
+                    status_text,
+                    format!(" ({})", reason).dimmed()
+                );
+            } else {
+                println!("{} {}{}{}",
+                    severity_prefix,
+                    check.name,
+                    dots,
+                    status_text
+                );
+            }
+        }
+        println!();
     }
     
     if !executor.warnings.is_empty() {
