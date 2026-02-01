@@ -1,38 +1,31 @@
 use anyhow::{bail, Context, Result};
 use crate::value::Value;
 use std::collections::HashMap;
+use once_cell::sync::Lazy;
 
-/// Built-in function signature
 pub type BuiltinFn = fn(&[Value]) -> Result<Value>;
 
-/// Registry of all built-in functions
+static BUILTIN_FUNCTIONS: Lazy<HashMap<&'static str, BuiltinFn>> = Lazy::new(|| {
+    let mut map = HashMap::new();
+    map.insert("file", builtin_file as BuiltinFn);
+    map.insert("dir", builtin_dir as BuiltinFn);
+    map.insert("glob", builtin_glob as BuiltinFn);
+    map.insert("exec", builtin_exec as BuiltinFn);
+    map.insert("http", builtin_http as BuiltinFn);
+    map.insert("rm", bultin_rm as BuiltinFn);
+    map
+});
+
 #[derive(Clone)]
-pub struct BuiltinRegistry {
-    functions: HashMap<&'static str, BuiltinFn>,
-}
+pub struct BuiltinRegistry;
 
 impl BuiltinRegistry {
     pub fn new() -> Self {
-        let mut registry = Self {
-            functions: HashMap::new(),
-        };
-        
-        // Register all built-in functions
-        registry.register("file", builtin_file);
-        registry.register("dir", builtin_dir);
-        registry.register("glob", builtin_glob);
-        registry.register("exec", builtin_exec);
-        registry.register("http", builtin_http);
-        
-        registry
-    }
-    
-    fn register(&mut self, name: &'static str, func: BuiltinFn) {
-        self.functions.insert(name, func);
+        Self
     }
     
     pub fn call(&self, name: &str, args: &[Value]) -> Result<Option<Value>> {
-        if let Some(func) = self.functions.get(name) {
+        if let Some(func) = BUILTIN_FUNCTIONS.get(name) {
             Ok(Some(func(args)?))
         } else {
             Ok(None)
@@ -40,7 +33,7 @@ impl BuiltinRegistry {
     }
     
     pub fn has(&self, name: &str) -> bool {
-        self.functions.contains_key(name)
+        BUILTIN_FUNCTIONS.contains_key(name)
     }
 }
 
@@ -50,13 +43,7 @@ impl Default for BuiltinRegistry {
     }
 }
 
-// ============================================================================
-// Built-in function implementations
-// ============================================================================
-
-/// file(path: string) -> File
-/// Creates a File object from a path
-fn builtin_file(args: &[Value]) -> Result<Value> {
+pub fn builtin_file(args: &[Value]) -> Result<Value> {
     if args.len() != 1 {
         bail!("file() takes exactly 1 argument, got {}", args.len());
     }
@@ -69,9 +56,7 @@ fn builtin_file(args: &[Value]) -> Result<Value> {
     Ok(Value::file_object(path))
 }
 
-/// dir(path: string) -> Array<File>
-/// Lists all files in a directory
-fn builtin_dir(args: &[Value]) -> Result<Value> {
+pub fn builtin_dir(args: &[Value]) -> Result<Value> {
     if args.len() != 1 {
         bail!("dir() takes exactly 1 argument, got {}", args.len());
     }
@@ -95,9 +80,21 @@ fn builtin_dir(args: &[Value]) -> Result<Value> {
     Ok(Value::Array(files))
 }
 
-/// glob(pattern: string) -> Array<File>
-/// Finds files matching a glob pattern
-fn builtin_glob(args: &[Value]) -> Result<Value> {
+pub fn bultin_rm(args: &[Value]) -> Result<Value> {
+    if args.len() != 1 {
+        bail!("rm() takes exactly 1 argument, got {}", args.len());
+    }
+    let path = match &args[0] {
+        Value::String(s) => s.clone(),
+        _ => bail!("rm() requires a string path"),
+    };
+    std::fs::remove_file(&path)
+        .with_context(|| format!("Failed to remove file: {}", path))?;
+    
+    Ok(Value::String(path))
+}
+
+pub fn builtin_glob(args: &[Value]) -> Result<Value> {
     if args.len() != 1 {
         bail!("glob() takes exactly 1 argument, got {}", args.len());
     }
@@ -118,9 +115,7 @@ fn builtin_glob(args: &[Value]) -> Result<Value> {
     Ok(Value::Array(files))
 }
 
-/// exec(command: string) -> string
-/// Executes a shell command and returns stdout
-fn builtin_exec(args: &[Value]) -> Result<Value> {
+pub fn builtin_exec(args: &[Value]) -> Result<Value> {
     if args.len() != 1 {
         bail!("exec() takes exactly 1 argument, got {}", args.len());
     }
@@ -145,9 +140,7 @@ fn builtin_exec(args: &[Value]) -> Result<Value> {
     Ok(Value::String(stdout))
 }
 
-/// http(url: string) -> HttpResponse
-/// Makes an HTTP GET request
-fn builtin_http(args: &[Value]) -> Result<Value> {
+pub fn builtin_http(args: &[Value]) -> Result<Value> {
     if args.is_empty() || args.len() > 2 {
         bail!("http() takes 1-2 arguments, got {}", args.len());
     }
@@ -157,7 +150,6 @@ fn builtin_http(args: &[Value]) -> Result<Value> {
         _ => bail!("http() requires a string URL"),
     };
     
-    // Optional: method (GET, POST, etc.)
     let method = if args.len() == 2 {
         match &args[1] {
             Value::String(s) => s.to_uppercase(),

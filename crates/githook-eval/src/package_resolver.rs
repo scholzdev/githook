@@ -6,7 +6,6 @@ use lru::LruCache;
 use std::num::NonZeroUsize;
 use once_cell::sync::Lazy;
 
-// Global LRU cache for package contents (50 packages max)
 static PACKAGE_CACHE: Lazy<Mutex<LruCache<String, String>>> = Lazy::new(|| {
     Mutex::new(LruCache::new(NonZeroUsize::new(50).unwrap()))
 });
@@ -86,7 +85,6 @@ pub fn load_package(
     namespace: &str,
     name: &str,
 ) -> Result<String> {
-    // Check LRU cache first
     let cache_key = format!("{}::{}", namespace, name);
     
     if let Ok(mut cache) = PACKAGE_CACHE.lock() {
@@ -127,7 +125,7 @@ pub fn load_package(
                 
                 if response.status() == 304 {
                     if cfg!(debug_assertions) {
-                        eprintln!("✓ Package @{}/{} is up-to-date (using cache)", namespace, name);
+                        eprintln!(" Package @{}/{} is up-to-date (using cache)", namespace, name);
                     }
                     fs::read_to_string(&path)?
                 } else if response.status().is_success() {
@@ -147,13 +145,12 @@ pub fn load_package(
                         let _ = fs::write(&etag_path, tag);
                     }
                     
-                    eprintln!("✓ Package @{}/{} updated", namespace, name);
+                    eprintln!("Package @{}/{} updated", namespace, name);
                     content
                 } else {
                     bail!("Failed to fetch package: HTTP {}", response.status());
                 }
             } else {
-                // No cached etag, fetch fresh
                 let response = client.get(&url).send()?;
                 
                 if !response.status().is_success() {
@@ -182,11 +179,10 @@ pub fn load_package(
                     let _ = fs::write(&etag_path, tag);
                 }
                 
-                eprintln!("✓ Package @{}/{} cached successfully", namespace, name);
+                eprintln!("Package @{}/{} cached successfully", namespace, name);
                 content
             }
         } else {
-            // No cache exists, fetch fresh
             eprintln!("Fetching package @{}/{}...", namespace, name);
             
             let response = client.get(&url).send()?;
@@ -217,12 +213,11 @@ pub fn load_package(
                 let _ = fs::write(&etag_path, tag);
             }
             
-            eprintln!("✓ Package @{}/{} cached successfully", namespace, name);
+            eprintln!("Package @{}/{} cached successfully", namespace, name);
             content
         }
     };
     
-    // Store in LRU cache
     if let Ok(mut cache) = PACKAGE_CACHE.lock() {
         cache.put(cache_key, content.clone());
     }

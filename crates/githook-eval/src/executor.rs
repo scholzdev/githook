@@ -1,5 +1,5 @@
 use anyhow::{Result, bail, Context as _};
-use rustc_hash::FxHashMap;  // Faster than ahash for small string keys
+use rustc_hash::FxHashMap;
 use std::process::Command;
 use rayon::prelude::*;
 
@@ -8,13 +8,8 @@ use crate::contexts::GitContext;
 use crate::builtins::BuiltinRegistry;
 use githook_syntax::ast::{Statement, Expression, BinaryOp, UnaryOp, MatchPattern, Severity};
 
-// Use FxHashMap for string-keyed maps (identifiers, variable names)
 type VariableMap = FxHashMap<String, Value>;
 type MacroMap = FxHashMap<String, (Vec<String>, Vec<Statement>)>;
-
-// ============================================================================
-// CHECK TRACKING
-// ============================================================================
 
 #[derive(Debug, Clone)]
 pub enum CheckStatus {
@@ -31,40 +26,17 @@ pub struct CheckResult {
     pub severity: Severity,
 }
 
-// ============================================================================
-// EXECUTOR V2 - Expression evaluation and statement execution
-// ============================================================================
-
 #[derive(Clone)]
 pub struct Executor {
-    /// Global variables (let bindings) - using FxHashMap for identifier lookups
     pub variables: VariableMap,
-    
-    /// Git context (injected)
     git_files: Vec<String>,
-    
-    /// Execution mode
     pub verbose: bool,
-    
-    /// Collected warnings
     pub warnings: Vec<String>,
-    
-    /// Collected blocks
     pub blocks: Vec<String>,
-    
-    /// Test counter
     pub tests_run: usize,
-    
-    /// Macro definitions (name -> (params, body)) - FxHashMap for macro name lookups
     macros: MacroMap,
-    
-    /// Namespaced macro definitions (namespace::name -> (params, body))
     namespaced_macros: MacroMap,
-    
-    /// Check results for structured output
     pub check_results: Vec<CheckResult>,
-    
-    /// Built-in function registry
     builtins: BuiltinRegistry,
 }
 
@@ -93,14 +65,9 @@ impl Executor {
         self.variables.insert(name, value);
     }
     
-    /// Add a check result for structured output
     pub fn add_check(&mut self, name: String, status: CheckStatus, reason: Option<String>, severity: Severity) {
         self.check_results.push(CheckResult { name, status, reason, severity });
     }
-    
-    // ========================================================================
-    // EXPRESSION EVALUATION
-    // ========================================================================
     
     pub fn eval_expression(&self, expr: &Expression) -> Result<Value> {
         match expr {
@@ -110,12 +77,10 @@ impl Executor {
             Expression::Null(_) => Ok(Value::Null),
             
             Expression::Identifier(name, _) => {
-                // Built-in objects
                 match name.as_str() {
                     "git" => Ok(self.create_git_object()),
                     "env" => Ok(Value::env_object()),
                     _ => {
-                        // User variables
                         self.variables.get(name)
                             .cloned()
                             .ok_or_else(|| anyhow::anyhow!("Variable '{}' not found", name))
@@ -128,16 +93,13 @@ impl Executor {
             }
             
             Expression::MethodCall { receiver, method, args, span: _ } => {
-                // Check if this is a built-in function call (e.g., file("path"))
                 if let Expression::Identifier(name, _) = receiver.as_ref() {
                     if self.builtins.has(name) {
-                        // Evaluate arguments
                         let arg_values: Result<Vec<Value>> = args.iter()
                             .map(|a| self.eval_expression(a))
                             .collect();
                         let arg_values = arg_values?;
                         
-                        // Call built-in function
                         if let Some(result) = self.builtins.call(name, &arg_values)? {
                             return Ok(result);
                         }
@@ -146,13 +108,11 @@ impl Executor {
                 
                 let obj_value = self.eval_expression(receiver)?;
                 
-                // Special handling for methods that accept closures
                 if matches!(method.as_str(), "filter" | "map" | "find" | "any" | "all") && args.len() == 1
                     && let Expression::Closure { param, body, .. } = &args[0] {
                         return self.eval_closure_method(&obj_value, method, param, body);
                     }
                 
-                // Regular method call with evaluated arguments
                 let arg_values: Result<Vec<Value>> = args.iter()
                     .map(|a| self.eval_expression(a))
                     .collect();
@@ -171,7 +131,6 @@ impl Executor {
             }
             
             Expression::Array(elements, _) => {
-                // Pre-allocate capacity for better performance
                 let mut values = Vec::with_capacity(elements.len());
                 for e in elements {
                     values.push(self.eval_expression(e)?);
@@ -204,7 +163,6 @@ impl Executor {
             bail!("Empty property chain");
         }
         
-        // First element: resolve to value
         let mut current = match chain[0].as_str() {
             "git" => self.create_git_object(),
             "env" => Value::env_object(),
@@ -213,7 +171,6 @@ impl Executor {
                 .ok_or_else(|| anyhow::anyhow!("Variable '{}' not found", chain[0]))?,
         };
         
-        // Rest: property access
         for prop in &chain[1..] {
             current = current.get_property(prop)?;
         }
@@ -223,7 +180,6 @@ impl Executor {
     
     fn eval_binary_op(&self, left: &Value, op: BinaryOp, right: &Value) -> Result<Value> {
         match op {
-            // Comparison
             BinaryOp::Eq => Ok(Value::Bool(left.equals(right)?)),
             BinaryOp::Ne => Ok(Value::Bool(left.not_equals(right)?)),
             BinaryOp::Lt => Ok(Value::Bool(left.less_than(right)?)),
@@ -231,18 +187,14 @@ impl Executor {
             BinaryOp::Gt => Ok(Value::Bool(left.greater_than(right)?)),
             BinaryOp::Ge => Ok(Value::Bool(left.greater_or_equal(right)?)),
             
-            // Logical
             BinaryOp::And => Ok(Value::Bool(left.is_truthy() && right.is_truthy())),
             BinaryOp::Or => Ok(Value::Bool(left.is_truthy() || right.is_truthy())),
             
-            // Arithmetic
             BinaryOp::Add => {
                 match (left, right) {
-                    // String concatenation
                     (Value::String(l), Value::String(r)) => Ok(Value::String(format!("{}{}", l, r))),
                     (Value::String(l), r) => Ok(Value::String(format!("{}{}", l, r.display()))),
                     (l, Value::String(r)) => Ok(Value::String(format!("{}{}", l.display(), r))),
-                    // Number addition
                     (Value::Number(l), Value::Number(r)) => Ok(Value::Number(l + r)),
                     _ => bail!("Cannot add {:?} and {:?}", left, right),
                 }
@@ -314,7 +266,6 @@ impl Executor {
     fn eval_closure_method(&self, obj: &Value, method: &str, param: &str, body: &Expression) -> Result<Value> {
         match obj {
             Value::Array(arr) => {
-                // Create ArrayContext to delegate to
                 let array_ctx = crate::contexts::ArrayContext::new(arr.clone());
                 match method {
                     "filter" => array_ctx.filter(self, param, body),
@@ -328,11 +279,7 @@ impl Executor {
             _ => bail!("Cannot call closure method '{}' on non-array value", method),
         }
     }
-    
-    // ========================================================================
-    // STATEMENT EXECUTION
-    // ========================================================================
-    
+   
     pub fn execute_statements(&mut self, statements: &[Statement]) -> Result<ExecutionResult> {
         for stmt in statements {
             let result = self.execute_statement(stmt)?;
@@ -353,7 +300,6 @@ impl Executor {
             }
             
             Statement::Print { message, span: _ } => {
-                // Evaluate the expression and convert to string
                 let value = self.eval_expression(message)?;
                 let text = match value {
                     Value::String(s) => s,
@@ -368,7 +314,6 @@ impl Executor {
                         strings.join(", ")
                     },
                     Value::Object(obj) => {
-                        // Try to get a reasonable string representation
                         if let Some(path_ctx) = &obj.path_context {
                             path_ctx.to_string()
                         } else if let Some(name_prop) = obj.properties.get("name") {
@@ -387,7 +332,6 @@ impl Executor {
             }
             
             Statement::Block { message, span: _ } => {
-                // Block means "stop and show message" - like a hard block
                 self.blocks.push(message.clone());
                 Ok(ExecutionResult::Blocked)
             }
@@ -406,13 +350,11 @@ impl Executor {
             }
             
             Statement::Parallel { commands, span: _ } => {
-                // Parallel execution using rayon - interpolate strings first
                 let interpolated: Result<Vec<String>> = commands.iter()
                     .map(|cmd| self.interpolate_string(cmd))
                     .collect();
                 let interpolated = interpolated?;
                 
-                // Run commands in parallel
                 let results: Vec<Result<()>> = interpolated.par_iter()
                     .map(|cmd| {
                         let output = Command::new("sh")
@@ -430,7 +372,6 @@ impl Executor {
                     })
                     .collect();
                 
-                // Check for errors
                 for result in results {
                     result?;
                 }
@@ -497,7 +438,6 @@ impl Executor {
                     self.warnings.push(msg);
                     self.tests_run += 1;
                     if interactive.is_some() {
-                        // TODO: Interactive prompts
                     }
                 }
                 Ok(ExecutionResult::Continue)
@@ -512,44 +452,35 @@ impl Executor {
             }
             
             Statement::MacroDef { name, params, body, span: _ } => {
-                // Store macro definition (convert SmallVec to Vec)
                 self.macros.insert(name.clone(), (params.to_vec(), body.clone()));
                 Ok(ExecutionResult::Continue)
             }
             
             Statement::MacroCall { namespace, name, args, span: _ } => {
-                // Lookup macro
                 let (params, body) = if let Some(ns) = namespace {
-                    // Namespaced macro call: @namespace:macro_name
                     let full_name = format!("{}::{}", ns, name);
                     self.namespaced_macros.get(&full_name)
                         .cloned()
                         .ok_or_else(|| anyhow::anyhow!("Macro '{}::{}' not defined. Did you import the package '@{}/{}'?", ns, name, "preview", ns))?
                 } else {
-                    // Local macro call: @macro_name
                     self.macros.get(name)
                         .cloned()
                         .ok_or_else(|| anyhow::anyhow!("Macro '{}' not defined", name))?
                 };
                 
-                // Check parameter count
                 if params.len() != args.len() {
                     bail!("Macro '{}' expects {} parameters, got {}", name, params.len(), args.len());
                 }
                 
-                // Save current variables
                 let saved_vars = self.variables.clone();
                 
-                // Bind parameters
                 for (param, arg) in params.iter().zip(args.iter()) {
                     let arg_value = self.eval_expression(arg)?;
                     self.variables.insert(param.clone(), arg_value);
                 }
                 
-                // Execute macro body
                 let result = self.execute_statements(&body);
                 
-                // Restore variables (but keep any new bindings from macro)
                 for (key, value) in saved_vars {
                     self.variables.entry(key).or_insert(value);
                 }
@@ -558,14 +489,11 @@ impl Executor {
             }
             
             Statement::Import { path, alias, span: _ } => {
-                // Import local .ghook file
                 let file_path = std::path::Path::new(path);
                 
-                // Resolve relative to current file or workspace
                 let import_path = if file_path.is_absolute() {
                     file_path.to_path_buf()
                 } else {
-                    // Assume relative to .githook directory for now
                     std::path::PathBuf::from(".githook").join(path)
                 };
                 
@@ -573,7 +501,6 @@ impl Executor {
                     bail!("Import file not found: {}", path);
                 }
                 
-                // Read and parse imported file
                 let source = std::fs::read_to_string(&import_path)
                     .with_context(|| format!("Failed to read import file: {}", path))?;
                 
@@ -583,10 +510,7 @@ impl Executor {
                 let statements = githook_syntax::parser::parse(tokens)
                     .with_context(|| format!("Failed to parse import file: {}", path))?;
                 
-                // Execute imported statements
                 if let Some(alias_name) = alias {
-                    // TODO: Support namespaced imports with alias
-                    // For now just execute directly
                     if self.verbose {
                         println!("Importing '{}' as '{}'", path, alias_name);
                     }
@@ -596,12 +520,11 @@ impl Executor {
             }
             
             Statement::Use { package, alias, span: _ } => {
-                // Use external package: use "@namespace/name"
                 if !package.starts_with('@') {
                     bail!("Package must start with '@', e.g. '@preview/quality'");
                 }
                 
-                let package_path = &package[1..]; // Remove @
+                let package_path = &package[1..];
                 let parts: Vec<&str> = package_path.split('/').collect();
                 
                 if parts.len() != 2 {
@@ -611,7 +534,6 @@ impl Executor {
                 let namespace = parts[0];
                 let name = parts[1];
                 
-                // Load package (auto-fetches if not cached)
                 let source = crate::package_resolver::load_package(namespace, name)
                     .with_context(|| format!("Failed to load package: {}", package))?;
                 
@@ -621,16 +543,12 @@ impl Executor {
                 let statements = githook_syntax::parser::parse(tokens)
                     .with_context(|| format!("Failed to parse package: {}", package))?;
                 
-                // Execute package statements and register macros in namespace
                 let namespace_key = alias.as_ref().unwrap_or(&name.to_string()).clone();
                 
-                // Save current macros
                 let saved_local_macros = self.macros.clone();
                 
-                // Execute package (macros will be added to self.macros)
                 self.execute_statements(&statements)?;
                 
-                // Move all newly defined macros to namespaced_macros
                 for (macro_name, macro_def) in &self.macros {
                     if !saved_local_macros.contains_key(macro_name) {
                         let full_name = format!("{}::{}", namespace_key, macro_name);
@@ -638,11 +556,10 @@ impl Executor {
                     }
                 }
                 
-                // Restore local macros (remove package macros from local scope)
                 self.macros = saved_local_macros;
                 
                 if self.verbose {
-                    println!("✓ Package '{}' loaded into namespace '{}'", package, namespace_key);
+                    println!("Package '{}' loaded into namespace '{}'", package, namespace_key);
                 }
                 
                 Ok(ExecutionResult::Continue)
@@ -656,18 +573,14 @@ impl Executor {
                     return Ok(ExecutionResult::Continue);
                 }
                 
-                // Try to execute the group body
                 let result = self.execute_statements(body);
                 
                 match result {
                     Ok(exec_result) => {
-                        // Check if the group had any actual work (look for tests_run before/after)
-                        // For now, mark as Passed
                         self.add_check(name.clone(), CheckStatus::Passed, None, sev.clone());
                         Ok(exec_result)
                     }
                     Err(e) => {
-                        // Group failed
                         self.add_check(name.clone(), CheckStatus::Failed, Some(e.to_string()), sev.clone());
                         Err(e)
                     }
@@ -681,12 +594,9 @@ impl Executor {
                 match result {
                     Ok(exec_result) => Ok(exec_result),
                     Err(e) => {
-                        // Error occurred, execute catch body
-                        // Bind error message to variable (use explicit name or default to "error")
                         let var_name = catch_var.as_ref().map(|s| s.as_str()).unwrap_or("error");
                         self.variables.insert(var_name.to_string(), Value::String(e.to_string()));
                         
-                        // Execute catch body
                         self.execute_statements(catch_body)
                     }
                 }
@@ -698,7 +608,6 @@ impl Executor {
         let items = match collection {
             Value::Array(arr) => arr,
             Value::Object(obj) if obj.type_name == "Git" => {
-                // git.all_files or git.files.staged
                 if let Some(Value::Array(files)) = obj.get("files") {
                     files
                 } else {
@@ -708,53 +617,43 @@ impl Executor {
             _ => bail!("Cannot iterate over {:?}", collection),
         };
         
-        // Track if collection was empty
         if items.is_empty() {
-            self.tests_run += 1; // Count foreach as 1 check even if empty
+            self.tests_run += 1;
             return Ok(ExecutionResult::Continue);
         }
         
         for item in items {
-            // Apply pattern filter if specified
             if let Some(pattern_str) = pattern {
-                // Get the file name from the item
                 let item_name = if let Value::Object(_obj) = item {
-                    // Use get_property() to access File context properties
                     match item.get_property("name") {
                         Ok(Value::String(name)) => name,
-                        _ => continue, // Skip if no name property or not a string
+                        _ => continue,
                     }
                 } else if let Value::String(s) = item {
                     s.clone()
                 } else {
-                    continue; // Skip if not an object or string
+                    continue;
                 };
                 
-                // Check if item matches pattern (wildcard matching)
                 if !Self::matches_pattern(&item_name, pattern_str) {
-                    continue; // Skip this item
+                    continue;
                 }
             }
             
-            // Set loop variable
             let old_value = self.variables.insert(var_name.to_string(), item.clone());
             
-            // Execute body - this will increment tests_run for each check
             let result = self.execute_statements(body)?;
             
-            // Restore old value
             if let Some(old) = old_value {
                 self.variables.insert(var_name.to_string(), old);
             } else {
                 self.variables.remove(var_name);
             }
             
-            // Handle break: exit the loop
             if result.is_break() {
                 return Ok(ExecutionResult::Continue);
             }
             
-            // Handle continue: skip to next iteration
             if result.is_continue() {
                 continue;
             }
@@ -774,7 +673,6 @@ impl Executor {
             }
         }
         
-        // No match found
         Ok(ExecutionResult::Continue)
     }
     
@@ -786,12 +684,10 @@ impl Executor {
             }
             
             MatchPattern::Wildcard(s, _) => {
-                // Simple glob matching
                 let value_str = value.as_string()?;
                 let pattern_str = s.as_str();
                 
                 if pattern_str.contains('*') {
-                    // Convert glob to regex
                     let regex_pattern = pattern_str
                         .replace(".", "\\.")
                         .replace("*", ".*");
@@ -805,20 +701,14 @@ impl Executor {
             MatchPattern::Underscore(_) => Ok(true),
         }
     }
-    
-    // ========================================================================
-    // HELPERS
-    // ========================================================================
-    
+
     fn interpolate_string(&self, s: &str) -> Result<String> {
         let mut result = String::new();
         let mut chars = s.chars().peekable();
         
         while let Some(ch) = chars.next() {
             if ch == '$' && chars.peek() == Some(&'{') {
-                chars.next(); // consume '{'
-                
-                // Extract expression until '}'
+                chars.next();
                 let mut expr_str = String::new();
                 let mut depth = 1;
                 for ch in chars.by_ref() {
@@ -836,7 +726,6 @@ impl Executor {
                     }
                 }
                 
-                // Parse the expression properly using the parser
                 use githook_syntax::lexer::tokenize;
                 use githook_syntax::parser::Parser;
                 
@@ -870,7 +759,6 @@ impl Executor {
             bail!("Command failed: {}\n{}", cmd, stderr);
         }
         
-        // Always print stdout from commands
         let stdout = String::from_utf8_lossy(&output.stdout);
         if !stdout.is_empty() {
             print!("{}", stdout);
@@ -880,14 +768,11 @@ impl Executor {
     }
     
     fn create_git_object(&self) -> Value {
-        // Get git context from githook-git crate
         let git_context = GitContext::new();
         
-        // Create Git object with context
         let mut git = Object::new("Git")
             .with_git_context(git_context.clone());
         
-        // files object with staged and all arrays
         let mut files_obj = Object::new("FilesCollection")
             .with_files_context(git_context.files.clone());
         
@@ -923,7 +808,6 @@ impl Executor {
         
         git.set("files", Value::Object(files_obj));
         
-        // diff object with added/removed lines
         let mut diff_obj = Object::new("DiffCollection");
         
         let added_lines: Vec<Value> = git_context.diff.added_lines.iter()
@@ -938,7 +822,6 @@ impl Executor {
         
         git.set("diff", Value::Object(diff_obj));
         
-        // merge object with source and target
         let mut merge_obj = Object::new("MergeContext");
         
         let merge_source = githook_git::get_merge_source_branch().unwrap_or_else(|_| "unknown".to_string());
@@ -949,12 +832,10 @@ impl Executor {
         
         git.set("merge", Value::Object(merge_obj));
         
-        // branch object with context
         let branch = Object::new("Branch")
             .with_branch_context(git_context.branch.clone());
         git.set("branch", Value::Object(branch));
         
-        // commit object (null if no commit exists)
         let commit_value = if let Some(commit_info) = git_context.commit.clone() {
             let commit = Object::new("Commit")
                 .with_commit_context(commit_info);
@@ -964,17 +845,14 @@ impl Executor {
         };
         git.set("commit", commit_value);
         
-        // author object with context
         let author = Object::new("Author")
             .with_author_context(git_context.author.clone());
         git.set("author", Value::Object(author));
         
-        // remote object with context
         let remote = Object::new("Remote")
             .with_remote_context(git_context.remote.clone());
         git.set("remote", Value::Object(remote));
         
-        // stats object with context
         let stats = Object::new("Stats")
             .with_stats_context(git_context.stats.clone());
         git.set("stats", Value::Object(stats));
@@ -982,30 +860,24 @@ impl Executor {
         Value::Object(git)
     }
     
-    /// Simple wildcard pattern matching
-    /// Supports: *.ext, prefix*, *suffix, *middle*, exact_match
     fn matches_pattern(text: &str, pattern: &str) -> bool {
         if pattern == "*" {
-            return true; // Match everything
+            return true;
         }
         
         if pattern.starts_with('*') && pattern.ends_with('*') {
-            // *middle* - contains
             let middle = &pattern[1..pattern.len()-1];
             return text.contains(middle);
         }
         
         if let Some(suffix) = pattern.strip_prefix('*') {
-            // *suffix - ends with
             return text.ends_with(suffix);
         }
         
         if let Some(prefix) = pattern.strip_suffix('*') {
-            // prefix* - starts with
             return text.starts_with(prefix);
         }
         
-        // Exact match
         text == pattern
     }
 }
@@ -1016,22 +888,11 @@ impl Default for Executor {
     }
 }
 
-// ============================================================================
-// EXECUTION RESULT
-// ============================================================================
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExecutionResult {
-    /// Continue execution
     Continue,
-    
-    /// Block execution (block if triggered)
     Blocked,
-    
-    /// Break from loop
     Break,
-    
-    /// Continue to next loop iteration
     ContinueLoop,
 }
 

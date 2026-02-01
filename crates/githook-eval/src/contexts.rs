@@ -811,7 +811,6 @@ impl ArrayContext {
     }
 }
 
-// Add closure methods that work with executor
 impl ArrayContext {
     pub fn filter(&self, executor: &crate::executor::Executor, param: &str, body: &githook_syntax::ast::Expression) -> Result<crate::value::Value> {
         use crate::value::Value;
@@ -921,7 +920,6 @@ impl HttpResponseContext {
     }
 }
 
-// Non-macro implementation for methods that return Value
 impl HttpResponseContext {
     pub fn json_parsed(&self) -> crate::value::Value {
         match serde_json::from_str::<serde_json::Value>(&self.body) {
