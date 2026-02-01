@@ -80,6 +80,7 @@ impl Executor {
                 match name.as_str() {
                     "git" => Ok(self.create_git_object()),
                     "env" => Ok(Value::env_object()),
+                    "http" => Ok(Value::http_object()),
                     _ => {
                         self.variables.get(name)
                             .cloned()

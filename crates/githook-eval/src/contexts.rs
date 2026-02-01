@@ -879,6 +879,15 @@ impl ArrayContext {
 }
 
 #[derive(Debug, Clone)]
+pub struct HttpContext;
+
+impl HttpContext {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct HttpResponseContext {
     status: u16,
     body: String,

@@ -11,7 +11,6 @@ static BUILTIN_FUNCTIONS: Lazy<HashMap<&'static str, BuiltinFn>> = Lazy::new(|| 
     map.insert("dir", builtin_dir as BuiltinFn);
     map.insert("glob", builtin_glob as BuiltinFn);
     map.insert("exec", builtin_exec as BuiltinFn);
-    map.insert("http", builtin_http as BuiltinFn);
     map.insert("rm", bultin_rm as BuiltinFn);
     map
 });
@@ -140,23 +139,30 @@ pub fn builtin_exec(args: &[Value]) -> Result<Value> {
     Ok(Value::String(stdout))
 }
 
-pub fn builtin_http(args: &[Value]) -> Result<Value> {
-    if args.is_empty() || args.len() > 2 {
-        bail!("http() takes 1-2 arguments, got {}", args.len());
+pub fn builtin_http_get(args: &[Value]) -> Result<Value> {
+    http_request("GET", args)
+}
+
+pub fn builtin_http_post(args: &[Value]) -> Result<Value> {
+    http_request("POST", args)
+}
+
+pub fn builtin_http_put(args: &[Value]) -> Result<Value> {
+    http_request("PUT", args)
+}
+
+pub fn builtin_http_delete(args: &[Value]) -> Result<Value> {
+    http_request("DELETE", args)
+}
+
+fn http_request(method: &str, args: &[Value]) -> Result<Value> {
+    if args.len() != 1 {
+        bail!("http.{}() takes exactly 1 argument, got {}", method.to_lowercase(), args.len());
     }
     
     let url = match &args[0] {
         Value::String(s) => s.clone(),
-        _ => bail!("http() requires a string URL"),
-    };
-    
-    let method = if args.len() == 2 {
-        match &args[1] {
-            Value::String(s) => s.to_uppercase(),
-            _ => "GET".to_string(),
-        }
-    } else {
-        "GET".to_string()
+        _ => bail!("http.{}() requires a string URL", method.to_lowercase()),
     };
     
     let client = reqwest::blocking::Client::builder()
@@ -165,7 +171,7 @@ pub fn builtin_http(args: &[Value]) -> Result<Value> {
         .build()
         .context("Failed to create HTTP client")?;
     
-    let response = match method.as_str() {
+    let response = match method {
         "GET" => client.get(&url),
         "POST" => client.post(&url),
         "PUT" => client.put(&url),

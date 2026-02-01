@@ -4,7 +4,7 @@ use crate::contexts::{
     StringContext, NumberContext, ArrayContext,
     FileContext, PathContext,
     GitContext, BranchInfo, CommitInfo, AuthorInfo, RemoteInfo, DiffStats, FilesCollection,
-    HttpResponseContext,
+    HttpResponseContext, HttpContext,
 };
 
 #[derive(Debug, Clone)]
@@ -35,6 +35,7 @@ pub struct Object {
     pub number_context: Option<NumberContext>,
     pub array_context: Option<ArrayContext>,
     pub http_response_context: Option<HttpResponseContext>,
+    pub http_context: Option<HttpContext>,
 }
 
 impl Object {
@@ -55,6 +56,7 @@ impl Object {
             number_context: None,
             array_context: None,
             http_response_context: None,
+            http_context: None,
         }
     }
     
@@ -105,6 +107,11 @@ impl Object {
     
     pub fn with_http_response_context(mut self, ctx: HttpResponseContext) -> Self {
         self.http_response_context = Some(ctx);
+        self
+    }
+    
+    pub fn with_http_context(mut self, ctx: HttpContext) -> Self {
+        self.http_context = Some(ctx);
         self
     }
     
@@ -424,6 +431,24 @@ impl Value {
             } else {
                 bail!("HttpResponse object has no context")
             }
+        }
+        else if obj.type_name == "Http" {
+            if obj.http_context.is_some() {
+                if args.len() != 1 {
+                    bail!("http.{}() takes exactly 1 argument (url)", name);
+                }
+                let url = args[0].as_string()?;
+                
+                match name {
+                    "get" => crate::builtins::builtin_http_get(&[Value::String(url)]),
+                    "post" => crate::builtins::builtin_http_post(&[Value::String(url)]),
+                    "put" => crate::builtins::builtin_http_put(&[Value::String(url)]),
+                    "delete" => crate::builtins::builtin_http_delete(&[Value::String(url)]),
+                    _ => bail!("Method 'http.{}' not found", name),
+                }
+            } else {
+                bail!("Http object has no context")
+            }
         } 
         else {
             bail!("Method '{}' not found on {}", name, obj.type_name)
@@ -525,6 +550,14 @@ impl Value {
         Value::Object(
             Object::new("HttpResponse")
                 .with_http_response_context(response_ctx)
+        )
+    }
+    
+    pub fn http_object() -> Value {
+        let http_ctx = crate::contexts::HttpContext::new();
+        Value::Object(
+            Object::new("Http")
+                .with_http_context(http_ctx)
         )
     }
 }
