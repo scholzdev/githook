@@ -248,7 +248,6 @@ impl Value {
                             return Ok(value);
                         }
                 if obj.type_name == "FilesCollection" {
-                    // FilesCollection doesn't use callable_impl, access properties directly
                     if let Some(ctx) = &obj.files_context {
                         match name {
                             "staged" => {
@@ -400,7 +399,6 @@ impl Value {
         } 
         else if obj.type_name == "Path" {
             if let Some(ctx) = &obj.path_context {
-                // Convert Value args to strings for the call
                 let string_args: Result<Vec<String>> = args.iter()
                     .map(|v| v.as_string())
                     .collect();
@@ -413,7 +411,6 @@ impl Value {
         }
         else if obj.type_name == "HttpResponse" {
             if let Some(ctx) = &obj.http_response_context {
-                // Special case for json() method
                 if name == "json" && args.is_empty() {
                     return Ok(ctx.json_parsed());
                 }
