@@ -1153,3 +1153,221 @@ pub fn parse(tokens: Vec<SpannedToken>) -> Result<Vec<Statement>> {
 
     Ok(statements)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lexer::tokenize;
+
+    #[test]
+    fn test_parse_print_statement() {
+        let input = r#"print "hello""#;
+        let tokens = tokenize(input).unwrap();
+        let ast = parse(tokens).unwrap();
+        
+        assert_eq!(ast.len(), 1);
+        assert!(matches!(ast[0], Statement::Print { .. }));
+    }
+
+    #[test]
+    fn test_parse_let_statement() {
+        let input = r#"let name = "John""#;
+        let tokens = tokenize(input).unwrap();
+        let ast = parse(tokens).unwrap();
+        
+        assert_eq!(ast.len(), 1);
+        assert!(matches!(ast[0], Statement::Let { .. }));
+    }
+
+    #[test]
+    fn test_parse_run_statement() {
+        let input = r#"run "npm test""#;
+        let tokens = tokenize(input).unwrap();
+        let ast = parse(tokens).unwrap();
+        
+        assert_eq!(ast.len(), 1);
+        assert!(matches!(ast[0], Statement::Run { .. }));
+    }
+
+    #[test]
+    fn test_parse_if_statement() {
+        let input = r#"if x == 1 { print "yes" }"#;
+        let tokens = tokenize(input).unwrap();
+        let ast = parse(tokens).unwrap();
+        
+        assert_eq!(ast.len(), 1);
+        assert!(matches!(ast[0], Statement::If { .. }));
+    }
+
+    #[test]
+    fn test_parse_if_else_statement() {
+        let input = r#"if x == 1 { print "yes" } else { print "no" }"#;
+        let tokens = tokenize(input).unwrap();
+        let ast = parse(tokens).unwrap();
+        
+        assert_eq!(ast.len(), 1);
+        if let Statement::If { else_body, .. } = &ast[0] {
+            assert!(else_body.is_some());
+        } else {
+            panic!("Expected If statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_group_statement() {
+        let input = r#"group test info { print "test" }"#;
+        let tokens = tokenize(input).unwrap();
+        let ast = parse(tokens).unwrap();
+        
+        assert_eq!(ast.len(), 1);
+        assert!(matches!(ast[0], Statement::Group { .. }));
+    }
+
+    #[test]
+    fn test_parse_foreach_statement() {
+        let input = r#"foreach git.files.staged matching "*.rs" { file in print file.name }"#;
+        let tokens = tokenize(input).unwrap();
+        let ast = parse(tokens).unwrap();
+        
+        assert_eq!(ast.len(), 1);
+        assert!(matches!(ast[0], Statement::ForEach { .. }));
+    }
+
+    #[test]
+    fn test_parse_macro_def() {
+        let input = r#"macro check_files { print "checking" }"#;
+        let tokens = tokenize(input).unwrap();
+        let ast = parse(tokens).unwrap();
+        
+        assert_eq!(ast.len(), 1);
+        assert!(matches!(ast[0], Statement::MacroDef { .. }));
+    }
+
+    #[test]
+    fn test_parse_macro_call() {
+        let input = r#"@check_files()"#;
+        let tokens = tokenize(input).unwrap();
+        let ast = parse(tokens).unwrap();
+        
+        assert_eq!(ast.len(), 1);
+        assert!(matches!(ast[0], Statement::MacroCall { .. }));
+    }
+
+    #[test]
+    fn test_parse_import_statement() {
+        let input = r#"import "./helpers.ghook" as helpers"#;
+        let tokens = tokenize(input).unwrap();
+        let ast = parse(tokens).unwrap();
+        
+        assert_eq!(ast.len(), 1);
+        assert!(matches!(ast[0], Statement::Import { .. }));
+    }
+
+    #[test]
+    fn test_parse_binary_expression() {
+        let input = r#"if x == 1 and y == 2 { print "ok" }"#;
+        let tokens = tokenize(input).unwrap();
+        let ast = parse(tokens).unwrap();
+        
+        assert_eq!(ast.len(), 1);
+        if let Statement::If { condition, .. } = &ast[0] {
+            assert!(matches!(condition, Expression::Binary { .. }));
+        } else {
+            panic!("Expected If statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_property_access() {
+        let input = r#"print git.files.staged"#;
+        let tokens = tokenize(input).unwrap();
+        let ast = parse(tokens).unwrap();
+        
+        assert_eq!(ast.len(), 1);
+        if let Statement::Print { message, .. } = &ast[0] {
+            assert!(matches!(message, Expression::PropertyAccess { .. }));
+        } else {
+            panic!("Expected Print statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_method_call() {
+        let input = r#"print files.length()"#;
+        let tokens = tokenize(input).unwrap();
+        let ast = parse(tokens).unwrap();
+        
+        assert_eq!(ast.len(), 1);
+        if let Statement::Print { message, .. } = &ast[0] {
+            assert!(matches!(message, Expression::MethodCall { .. }));
+        } else {
+            panic!("Expected Print statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_array_literal() {
+        let input = r#"let items = [1, 2, 3]"#;
+        let tokens = tokenize(input).unwrap();
+        let ast = parse(tokens).unwrap();
+        
+        assert_eq!(ast.len(), 1);
+        if let Statement::Let { value, .. } = &ast[0] {
+            assert!(matches!(value, LetValue::Expression(Expression::Array(_, _))));
+        } else {
+            panic!("Expected Let statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_multiple_statements() {
+        let input = r#"
+            print "hello"
+            print "world"
+            let x = 1
+        "#;
+        let tokens = tokenize(input).unwrap();
+        let ast = parse(tokens).unwrap();
+        
+        assert_eq!(ast.len(), 3);
+    }
+
+    #[test]
+    fn test_parse_error_missing_brace() {
+        let input = r#"group test info"#;
+        let tokens = tokenize(input).unwrap();
+        let result = parse(tokens);
+        
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_error_unexpected_token() {
+        let input = r#"print print"#;
+        let tokens = tokenize(input).unwrap();
+        let result = parse(tokens);
+        
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_nested_blocks() {
+        let input = r#"
+            if x == 1 {
+                if y == 2 {
+                    print "nested"
+                }
+            }
+        "#;
+        let tokens = tokenize(input).unwrap();
+        let ast = parse(tokens).unwrap();
+        
+        assert_eq!(ast.len(), 1);
+        if let Statement::If { then_body, .. } = &ast[0] {
+            assert_eq!(then_body.len(), 1);
+            assert!(matches!(then_body[0], Statement::If { .. }));
+        } else {
+            panic!("Expected If statement");
+        }
+    }
+}

@@ -12,7 +12,6 @@ use githook_syntax::ast::{Statement, Expression, BinaryOp, UnaryOp, MatchPattern
 type VariableMap = FxHashMap<String, Value>;
 type MacroMap = FxHashMap<String, (Vec<String>, Vec<Statement>)>;
 
-/// Status of a check/validation performed during script execution.
 #[derive(Debug, Clone)]
 pub enum CheckStatus {
     Passed,
@@ -417,7 +416,6 @@ impl Executor {
                     };
                     self.blocks.push(msg);
                     self.tests_run += 1;
-                    // TODO: Implement interactive prompts for user confirmation
                     let _ = interactive;
                     return Ok(ExecutionResult::Blocked);
                 }
@@ -434,7 +432,6 @@ impl Executor {
                     };
                     self.warnings.push(msg);
                     self.tests_run += 1;
-                    // TODO: Implement interactive prompts for user confirmation
                     let _ = interactive;
                 }
                 Ok(ExecutionResult::Continue)
@@ -839,5 +836,185 @@ impl Executor {
 impl Default for Executor {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use githook_syntax::{lexer, parser};
+    use githook_syntax::error::Span;
+
+    fn dummy_span() -> Span {
+        Span::new(1, 1, 0, 0)
+    }
+
+    fn parse_and_execute(input: &str) -> Result<Executor> {
+        let tokens = lexer::tokenize(input)?;
+        let ast = parser::parse(tokens)?;
+        let mut executor = Executor::new();
+        for stmt in ast {
+            executor.execute_statement(&stmt)?;
+        }
+        Ok(executor)
+    }
+
+    #[test]
+    fn test_execute_let_statement() {
+        let input = r#"let x = 42"#;
+        let executor = parse_and_execute(input).unwrap();
+        
+        let val = executor.variables.get("x").unwrap();
+        assert!(matches!(val, Value::Number(42.0)));
+    }
+
+    #[test]
+    fn test_execute_let_string() {
+        let input = r#"let name = "Alice""#;
+        let executor = parse_and_execute(input).unwrap();
+        
+        let val = executor.variables.get("name").unwrap();
+        if let Value::String(s) = val {
+            assert_eq!(s, "Alice");
+        } else {
+            panic!("Expected string value");
+        }
+    }
+
+    #[test]
+    fn test_execute_multiple_lets() {
+        let input = r#"
+            let x = 1
+            let y = 2
+            let z = 3
+        "#;
+        let executor = parse_and_execute(input).unwrap();
+        
+        assert!(executor.variables.contains_key("x"));
+        assert!(executor.variables.contains_key("y"));
+        assert!(executor.variables.contains_key("z"));
+    }
+
+    #[test]
+    fn test_eval_binary_expression() {
+        let input = r#"let result = 5 + 3"#;
+        let executor = parse_and_execute(input).unwrap();
+        
+        let val = executor.variables.get("result").unwrap();
+        assert!(matches!(val, Value::Number(8.0)));
+    }
+
+    #[test]
+    fn test_eval_comparison() {
+        let executor = Executor::new();
+        
+        let left = Expression::Number(5.0, dummy_span());
+        let right = Expression::Number(3.0, dummy_span());
+        let expr = Expression::Binary {
+            left: Box::new(left),
+            op: BinaryOp::Gt,
+            right: Box::new(right),
+            span: dummy_span(),
+        };
+        
+        let result = executor.eval_expression(&expr).unwrap();
+        assert!(matches!(result, Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_eval_logical_and() {
+        let executor = Executor::new();
+        
+        let left = Expression::Bool(true, dummy_span());
+        let right = Expression::Bool(false, dummy_span());
+        let expr = Expression::Binary {
+            left: Box::new(left),
+            op: BinaryOp::And,
+            right: Box::new(right),
+            span: dummy_span(),
+        };
+        
+        let result = executor.eval_expression(&expr).unwrap();
+        assert!(matches!(result, Value::Bool(false)));
+    }
+
+    #[test]
+    fn test_eval_logical_or() {
+        let executor = Executor::new();
+        
+        let left = Expression::Bool(true, dummy_span());
+        let right = Expression::Bool(false, dummy_span());
+        let expr = Expression::Binary {
+            left: Box::new(left),
+            op: BinaryOp::Or,
+            right: Box::new(right),
+            span: dummy_span(),
+        };
+        
+        let result = executor.eval_expression(&expr).unwrap();
+        assert!(matches!(result, Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_eval_string_literal() {
+        let executor = Executor::new();
+        let expr = Expression::String("hello".to_string(), dummy_span());
+        let result = executor.eval_expression(&expr).unwrap();
+        
+        assert!(matches!(result, Value::String(s) if s == "hello"));
+    }
+
+    #[test]
+    fn test_eval_number_literal() {
+        let executor = Executor::new();
+        let expr = Expression::Number(3.14, dummy_span());
+        let result = executor.eval_expression(&expr).unwrap();
+        
+        assert!(matches!(result, Value::Number(n) if (n - 3.14).abs() < 0.001));
+    }
+
+    #[test]
+    fn test_eval_bool_literal() {
+        let executor = Executor::new();
+        let expr = Expression::Bool(true, dummy_span());
+        let result = executor.eval_expression(&expr).unwrap();
+        
+        assert!(matches!(result, Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_eval_null_literal() {
+        let executor = Executor::new();
+        let expr = Expression::Null(dummy_span());
+        let result = executor.eval_expression(&expr).unwrap();
+        
+        assert!(matches!(result, Value::Null));
+    }
+
+    #[test]
+    fn test_variable_not_found() {
+        let executor = Executor::new();
+        let expr = Expression::Identifier("unknown".to_string(), dummy_span());
+        let result = executor.eval_expression(&expr);
+        
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_set_and_get_variable() {
+        let mut executor = Executor::new();
+        executor.set_variable("test".to_string(), Value::Number(100.0));
+        
+        assert!(executor.variables.contains_key("test"));
+        assert!(matches!(executor.variables.get("test"), Some(Value::Number(100.0))));
+    }
+
+    #[test]
+    fn test_matches_pattern() {
+        assert!(Executor::matches_pattern("test.rs", "*.rs"));
+        assert!(Executor::matches_pattern("test.rs", "test.*"));
+        assert!(Executor::matches_pattern("test.rs", "*est*"));
+        assert!(Executor::matches_pattern("anything", "*"));
+        assert!(!Executor::matches_pattern("test.py", "*.rs"));
     }
 }
