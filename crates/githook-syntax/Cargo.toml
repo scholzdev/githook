@@ -4,8 +4,10 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Lexer and parser for the githook DSL"
-keywords = ["parser", "lexer", "dsl"]
+repository.workspace = true
+homepage.workspace = true
+description = "Lexer and parser for the githook scripting language"
+keywords = ["parser", "lexer", "ast", "syntax"]
 
 [dependencies]
 anyhow.workspace = true

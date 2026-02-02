@@ -4,7 +4,10 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Git operations for githook"
+repository.workspace = true
+homepage.workspace = true
+description = "Git operations and utilities for the githook scripting language"
+keywords = ["git", "vcs", "version-control", "diff"]
 
 [dependencies]
 anyhow.workspace = true

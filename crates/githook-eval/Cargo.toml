@@ -4,8 +4,10 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Interpreter and evaluator for githook"
-keywords = ["interpreter", "evaluator"]
+repository.workspace = true
+homepage.workspace = true
+description = "Execution engine and runtime for the githook scripting language"
+keywords = ["interpreter", "evaluator", "runtime", "executor"]
 
 [dependencies]
 anyhow.workspace = true
