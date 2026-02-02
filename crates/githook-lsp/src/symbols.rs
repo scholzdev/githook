@@ -1,16 +1,15 @@
-use tower_lsp::lsp_types::*;
 use crate::document::DocumentState;
+use tower_lsp::lsp_types::*;
 
-/// Get document symbols for outline view
 pub fn get_document_symbols(_doc: &DocumentState) -> Vec<DocumentSymbol> {
     let mut symbols = Vec::new();
-    
-    // Extract macro definitions from AST
-    let macros = _doc.ast.as_ref()
+
+    let macros = _doc
+        .ast
+        .as_ref()
         .map(|ast| crate::ast_utils::extract_macros(ast))
         .unwrap_or_default();
-    
-    // Add macro definitions
+
     for macro_info in &macros {
         #[allow(deprecated)]
         let symbol = DocumentSymbol {
@@ -43,8 +42,7 @@ pub fn get_document_symbols(_doc: &DocumentState) -> Vec<DocumentSymbol> {
         };
         symbols.push(symbol);
     }
-    
-    // Add imports
+
     for (alias, path) in &[] as &[(String, String)] {
         let detail = format!("import \"{}\"", path);
         #[allow(deprecated)]
@@ -55,17 +53,29 @@ pub fn get_document_symbols(_doc: &DocumentState) -> Vec<DocumentSymbol> {
             tags: None,
             deprecated: None,
             range: Range {
-                start: Position { line: 0, character: 0 },
-                end: Position { line: 0, character: 0 },
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: 0,
+                    character: 0,
+                },
             },
             selection_range: Range {
-                start: Position { line: 0, character: 0 },
-                end: Position { line: 0, character: 0 },
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: 0,
+                    character: 0,
+                },
             },
             children: None,
         };
         symbols.push(symbol);
     }
-    
+
     symbols
 }

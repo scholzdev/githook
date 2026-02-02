@@ -15,14 +15,17 @@ fn extract_imports_recursive(statements: &[Statement], imports: &mut Vec<ImportI
                     alias: alias.clone(),
                 });
             }
-            Statement::Group { body, .. } |
-            Statement::MacroDef { body, .. } => {
+            Statement::Group { body, .. } | Statement::MacroDef { body, .. } => {
                 extract_imports_recursive(body, imports);
             }
             Statement::ForEach { body, .. } => {
                 extract_imports_recursive(body, imports);
             }
-            Statement::If { then_body, else_body, .. } => {
+            Statement::If {
+                then_body,
+                else_body,
+                ..
+            } => {
                 extract_imports_recursive(then_body, imports);
                 if let Some(else_b) = else_body {
                     extract_imports_recursive(else_b, imports);
@@ -54,7 +57,11 @@ fn extract_macros_recursive(statements: &[Statement], macros: &mut Vec<MacroInfo
             Statement::ForEach { body, .. } => {
                 extract_macros_recursive(body, macros);
             }
-            Statement::If { then_body, else_body, .. } => {
+            Statement::If {
+                then_body,
+                else_body,
+                ..
+            } => {
                 extract_macros_recursive(then_body, macros);
                 if let Some(else_b) = else_body {
                     extract_macros_recursive(else_b, macros);

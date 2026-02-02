@@ -1,7 +1,7 @@
-use crate::error::{Span, LexError};
+use crate::error::{LexError, Span};
+use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::fmt;
-use once_cell::sync::Lazy;
 
 static KEYWORDS: Lazy<HashMap<&'static str, Token>> = Lazy::new(|| {
     let mut m = HashMap::with_capacity(32);
@@ -88,7 +88,7 @@ pub enum Token {
     Arrow,
     FatArrow,
     At,
-    Dollar, 
+    Dollar,
     Identifier(String),
     String(String),
     Number(f64),
@@ -169,11 +169,11 @@ pub struct SpannedToken {
 pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
     let mut tokens = Vec::with_capacity(input.len() / 4);
     let mut chars = input.chars().peekable();
-    
+
     let mut line = 1;
     let mut col = 1;
     let mut offset = 0;
-    
+
     let bump = |ch: char, line: &mut usize, col: &mut usize, offset: &mut usize| {
         if ch == '\n' {
             *line += 1;
@@ -183,18 +183,18 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
         }
         *offset += ch.len_utf8();
     };
-    
+
     while let Some(&ch) = chars.peek() {
         let start_line = line;
         let start_col = col;
         let start_offset = offset;
-        
+
         match ch {
             ' ' | '\t' | '\r' => {
                 chars.next();
                 bump(ch, &mut line, &mut col, &mut offset);
             }
-            
+
             '\n' => {
                 chars.next();
                 bump(ch, &mut line, &mut col, &mut offset);
@@ -203,12 +203,12 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                     span: Span::new(start_line, start_col, start_offset, offset),
                 });
             }
-            
+
             '#' => {
                 let mut comment = String::new();
                 chars.next();
                 bump(ch, &mut line, &mut col, &mut offset);
-                
+
                 while let Some(&ch) = chars.peek() {
                     if ch == '\n' {
                         break;
@@ -217,20 +217,20 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                     chars.next();
                     bump(ch, &mut line, &mut col, &mut offset);
                 }
-                
+
                 tokens.push(SpannedToken {
                     token: Token::Comment(comment),
                     span: Span::new(start_line, start_col, start_offset, offset),
                 });
             }
-            
+
             '"' => {
                 chars.next();
                 bump(ch, &mut line, &mut col, &mut offset);
-                
+
                 let mut string = String::new();
                 let mut escaped = false;
-                
+
                 while let Some(&ch) = chars.peek() {
                     if escaped {
                         string.push(match ch {
@@ -254,13 +254,13 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                     chars.next();
                     bump(ch, &mut line, &mut col, &mut offset);
                 }
-                
+
                 tokens.push(SpannedToken {
                     token: Token::String(string),
                     span: Span::new(start_line, start_col, start_offset, offset),
                 });
             }
-            
+
             '0'..='9' => {
                 let mut num_str = String::new();
                 while let Some(&ch) = chars.peek() {
@@ -272,51 +272,56 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                         break;
                     }
                 }
-                
-                let mut num = num_str.parse::<f64>()
+
+                let mut num = num_str
+                    .parse::<f64>()
                     .map_err(|_| LexError::InvalidNumber {
                         text: num_str,
                         span: Span::new(start_line, start_col, start_offset, offset),
                     })?;
-                
+
                 if let Some(&ch) = chars.peek()
-                    && ch.is_alphabetic() {
-                        let mut unit = String::new();
-                        while let Some(&ch) = chars.peek() {
-                            if ch.is_alphabetic() {
-                                unit.push(ch);
-                                chars.next();
-                                bump(ch, &mut line, &mut col, &mut offset);
-                            } else {
-                                break;
-                            }
-                        }
-                        
-                        match unit.to_uppercase().as_str() {
-                            "KB" => num *= 1024.0,
-                            "MB" => num *= 1024.0 * 1024.0,
-                            "GB" => num *= 1024.0 * 1024.0 * 1024.0,
-                            "TB" => num *= 1024.0 * 1024.0 * 1024.0 * 1024.0,
-                            _ => {
-                                return Err(LexError::UnexpectedChar {
-                                    ch: unit.chars().next().unwrap(),
-                                    span: Span::new(start_line, start_col, start_offset, offset),
-                                    suggestion: Some(format!("Unknown size unit: {}. Use KB, MB, GB, or TB", unit)),
-                                });
-                            }
+                    && ch.is_alphabetic()
+                {
+                    let mut unit = String::new();
+                    while let Some(&ch) = chars.peek() {
+                        if ch.is_alphabetic() {
+                            unit.push(ch);
+                            chars.next();
+                            bump(ch, &mut line, &mut col, &mut offset);
+                        } else {
+                            break;
                         }
                     }
-                
+
+                    match unit.to_uppercase().as_str() {
+                        "KB" => num *= 1024.0,
+                        "MB" => num *= 1024.0 * 1024.0,
+                        "GB" => num *= 1024.0 * 1024.0 * 1024.0,
+                        "TB" => num *= 1024.0 * 1024.0 * 1024.0 * 1024.0,
+                        _ => {
+                            return Err(LexError::UnexpectedChar {
+                                ch: unit.chars().next().unwrap(),
+                                span: Span::new(start_line, start_col, start_offset, offset),
+                                suggestion: Some(format!(
+                                    "Unknown size unit: {}. Use KB, MB, GB, or TB",
+                                    unit
+                                )),
+                            });
+                        }
+                    }
+                }
+
                 tokens.push(SpannedToken {
                     token: Token::Number(num),
                     span: Span::new(start_line, start_col, start_offset, offset),
                 });
             }
-            
+
             '=' => {
                 chars.next();
                 bump(ch, &mut line, &mut col, &mut offset);
-                
+
                 if chars.peek() == Some(&'=') {
                     chars.next();
                     bump('=', &mut line, &mut col, &mut offset);
@@ -338,11 +343,11 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                     });
                 }
             }
-            
+
             '!' => {
                 chars.next();
                 bump(ch, &mut line, &mut col, &mut offset);
-                
+
                 if chars.peek() == Some(&'=') {
                     chars.next();
                     bump('=', &mut line, &mut col, &mut offset);
@@ -358,11 +363,11 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                     });
                 }
             }
-            
+
             '<' => {
                 chars.next();
                 bump(ch, &mut line, &mut col, &mut offset);
-                
+
                 if chars.peek() == Some(&'=') {
                     chars.next();
                     bump('=', &mut line, &mut col, &mut offset);
@@ -377,11 +382,11 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                     });
                 }
             }
-            
+
             '>' => {
                 chars.next();
                 bump(ch, &mut line, &mut col, &mut offset);
-                
+
                 if chars.peek() == Some(&'=') {
                     chars.next();
                     bump('=', &mut line, &mut col, &mut offset);
@@ -396,11 +401,11 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                     });
                 }
             }
-            
+
             '-' => {
                 chars.next();
                 bump(ch, &mut line, &mut col, &mut offset);
-                
+
                 if chars.peek() == Some(&'>') {
                     chars.next();
                     bump('>', &mut line, &mut col, &mut offset);
@@ -415,7 +420,7 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                     });
                 }
             }
-            
+
             '+' => {
                 chars.next();
                 bump(ch, &mut line, &mut col, &mut offset);
@@ -424,7 +429,7 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                     span: Span::new(start_line, start_col, start_offset, offset),
                 });
             }
-            
+
             '*' => {
                 chars.next();
                 bump(ch, &mut line, &mut col, &mut offset);
@@ -433,15 +438,15 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                     span: Span::new(start_line, start_col, start_offset, offset),
                 });
             }
-            
+
             '/' => {
                 chars.next();
                 bump(ch, &mut line, &mut col, &mut offset);
-                
+
                 if chars.peek() == Some(&'/') {
                     chars.next();
                     bump('/', &mut line, &mut col, &mut offset);
-                    
+
                     let mut comment = String::new();
                     while let Some(&ch) = chars.peek() {
                         if ch == '\n' {
@@ -451,7 +456,7 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                         bump(ch, &mut line, &mut col, &mut offset);
                         comment.push(ch);
                     }
-                    
+
                     tokens.push(SpannedToken {
                         token: Token::Comment(comment.trim().to_string()),
                         span: Span::new(start_line, start_col, start_offset, offset),
@@ -463,7 +468,7 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                     });
                 }
             }
-            
+
             '%' => {
                 chars.next();
                 bump(ch, &mut line, &mut col, &mut offset);
@@ -472,7 +477,7 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                     span: Span::new(start_line, start_col, start_offset, offset),
                 });
             }
-            
+
             '{' => {
                 chars.next();
                 bump(ch, &mut line, &mut col, &mut offset);
@@ -561,7 +566,7 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                     span: Span::new(start_line, start_col, start_offset, offset),
                 });
             }
-            
+
             _ if ch.is_alphabetic() || ch == '_' => {
                 let mut ident = String::with_capacity(16);
                 while let Some(&ch) = chars.peek() {
@@ -573,17 +578,18 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
                         break;
                     }
                 }
-                
-                let token = KEYWORDS.get(ident.as_str())
+
+                let token = KEYWORDS
+                    .get(ident.as_str())
                     .cloned()
                     .unwrap_or(Token::Identifier(ident));
-                
+
                 tokens.push(SpannedToken {
                     token,
                     span: Span::new(start_line, start_col, start_offset, offset),
                 });
             }
-            
+
             _ => {
                 return Err(LexError::UnexpectedChar {
                     ch,
@@ -593,7 +599,7 @@ pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
             }
         }
     }
-    
+
     Ok(tokens)
 }
 

@@ -1,22 +1,23 @@
-use tower_lsp::lsp_types::*;
 use crate::document::DocumentState;
-use githook_syntax::ast::{Statement, LetValue, Expression};
+use githook_syntax::ast::{Expression, LetValue, Statement};
+use tower_lsp::lsp_types::*;
 
 pub fn get_completions(doc: &DocumentState, position: Position) -> Vec<CompletionItem> {
     let mut completions = Vec::new();
-    
+
     if let Some(context) = get_context(doc, position) {
         match context {
             GithookCompletionContext::MacroCall(namespace) => {
                 if let Some(ast) = &doc.ast {
                     for stmt in ast {
-                        if let githook_syntax::ast::Statement::MacroDef { name, params, .. } = stmt {
+                        if let githook_syntax::ast::Statement::MacroDef { name, params, .. } = stmt
+                        {
                             let params_str = if params.is_empty() {
                                 String::new()
                             } else {
                                 format!("({})", params.join(", "))
                             };
-                            
+
                             completions.push(CompletionItem {
                                 label: name.clone(),
                                 kind: Some(CompletionItemKind::FUNCTION),
@@ -27,7 +28,7 @@ pub fn get_completions(doc: &DocumentState, position: Position) -> Vec<Completio
                         }
                     }
                 }
-                
+
                 if namespace.is_none() {
                     for (pkg, desc) in &[
                         ("git", "Git utilities package"),
@@ -41,7 +42,7 @@ pub fn get_completions(doc: &DocumentState, position: Position) -> Vec<Completio
                         });
                     }
                 }
-                
+
                 return completions;
             }
             GithookCompletionContext::PropertyAccess(prefix) => {
@@ -127,16 +128,21 @@ enum GithookCompletionContext {
     UsePath,
 }
 
-fn infer_variable_type(doc: &DocumentState, var_name: &str, _current_line: usize) -> Option<String> {
+fn infer_variable_type(
+    doc: &DocumentState,
+    var_name: &str,
+    _current_line: usize,
+) -> Option<String> {
     let ast = doc.ast.as_ref()?;
-    
+
     for stmt in ast {
         if let Statement::Let { name, value, .. } = stmt
-            && name == var_name {
-                return infer_let_value_type(value);
-            }
+            && name == var_name
+        {
+            return infer_let_value_type(value);
+        }
     }
-    
+
     None
 }
 
@@ -155,12 +161,8 @@ fn infer_expression_type(expr: &Expression) -> Option<String> {
         Expression::Number(_, _) => Some("number".to_string()),
         Expression::Bool(_, _) => Some("bool".to_string()),
         Expression::Array(_, _) => Some("array".to_string()),
-        Expression::PropertyAccess { chain, .. } => {
-            infer_property_chain_type(chain)
-        }
-        Expression::MethodCall { method, .. } => {
-            infer_method_return_type(method)
-        }
+        Expression::PropertyAccess { chain, .. } => infer_property_chain_type(chain),
+        Expression::MethodCall { method, .. } => infer_method_return_type(method),
         _ => None,
     }
 }
@@ -182,66 +184,74 @@ fn infer_method_return_type(method: &str) -> Option<String> {
 fn get_context(doc: &DocumentState, position: Position) -> Option<GithookCompletionContext> {
     let line_idx = position.line as usize;
     let lines: Vec<&str> = doc.text.lines().collect();
-    
+
     if line_idx >= lines.len() {
         return Some(GithookCompletionContext::Normal);
     }
-    
+
     let line = lines[line_idx];
     let char_idx = position.character as usize;
-    
+
     if char_idx == 0 {
         return Some(GithookCompletionContext::Normal);
     }
-    
+
     let before_cursor: String = line.chars().take(char_idx).collect();
-    
+
     if let Some(dot_pos) = before_cursor.rfind('.') {
         let before_dot = &before_cursor[..dot_pos];
-        
+
         if before_dot.trim_end().ends_with('"') || before_dot.trim_end().ends_with('}') {
-            return Some(GithookCompletionContext::PropertyAccess("string".to_string()));
+            return Some(GithookCompletionContext::PropertyAccess(
+                "string".to_string(),
+            ));
         }
-        
-        let ident_start = before_dot.rfind(|c: char| {
-            c.is_whitespace() || "({[,=!<>".contains(c)
-        }).map(|pos| pos + 1).unwrap_or(0);
-        
+
+        let ident_start = before_dot
+            .rfind(|c: char| c.is_whitespace() || "({[,=!<>".contains(c))
+            .map(|pos| pos + 1)
+            .unwrap_or(0);
+
         let prefix = &before_dot[ident_start..].trim();
-        
+
         if !prefix.is_empty() {
             if let Some(var_type) = infer_variable_type(doc, prefix, line_idx) {
                 return Some(GithookCompletionContext::PropertyAccess(var_type));
             }
-            
+
             return Some(GithookCompletionContext::PropertyAccess(prefix.to_string()));
         }
     }
-    
+
     if let Some(at_pos) = before_cursor.rfind('@') {
         let after_at = &before_cursor[at_pos + 1..];
         if let Some(dot_pos) = after_at.find('.') {
             let namespace = &after_at[..dot_pos];
-            return Some(GithookCompletionContext::MacroCall(Some(namespace.to_string())));
-        } else if after_at.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '/' || c == '-') {
+            return Some(GithookCompletionContext::MacroCall(Some(
+                namespace.to_string(),
+            )));
+        } else if after_at
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '/' || c == '-')
+        {
             return Some(GithookCompletionContext::MacroCall(None));
         }
     }
-    
+
     if before_cursor.contains("import") && before_cursor.trim_end().ends_with('"') {
         return Some(GithookCompletionContext::ImportPath);
     }
-    
+
     if before_cursor.contains("use") && before_cursor.contains("\"@") {
         return Some(GithookCompletionContext::UsePath);
     }
-    
+
     Some(GithookCompletionContext::Normal)
 }
 
 fn get_property_completions(prefix: &str) -> Vec<CompletionItem> {
     let mut completions = Vec::new();
-    
+
     let properties: &[(&str, &str)] = match prefix {
         "git" => &[
             ("files", "FilesCollection - File collections"),
@@ -332,9 +342,13 @@ fn get_property_completions(prefix: &str) -> Vec<CompletionItem> {
         ],
         "string" => {
             return get_string_method_completions();
-        },
+        }
         _ => {
-            if prefix.contains("name") || prefix.contains("message") || prefix.contains("email") || prefix.contains("url") {
+            if prefix.contains("name")
+                || prefix.contains("message")
+                || prefix.contains("email")
+                || prefix.contains("url")
+            {
                 return get_string_method_completions();
             }
             if prefix.contains("size") || prefix.contains("count") || prefix.contains("length") {
@@ -344,9 +358,9 @@ fn get_property_completions(prefix: &str) -> Vec<CompletionItem> {
                 return get_array_method_completions();
             }
             &[]
-        },
+        }
     };
-    
+
     for (name, detail) in properties {
         completions.push(CompletionItem {
             label: name.to_string(),
@@ -359,7 +373,7 @@ fn get_property_completions(prefix: &str) -> Vec<CompletionItem> {
             ..Default::default()
         });
     }
-    
+
     completions
 }
 

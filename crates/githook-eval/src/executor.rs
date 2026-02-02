@@ -1,4 +1,4 @@
-use anyhow::{Result, bail, Context as _};
+use anyhow::{Context as _, Result, bail};
 use rustc_hash::FxHashMap;
 use std::process::Command;
 use rayon::prelude::*;
@@ -6,11 +6,13 @@ use rayon::prelude::*;
 use crate::value::{Value, Object};
 use crate::contexts::GitContext;
 use crate::builtins::BuiltinRegistry;
+use crate::control_flow::ExecutionResult;
 use githook_syntax::ast::{Statement, Expression, BinaryOp, UnaryOp, MatchPattern, Severity};
 
 type VariableMap = FxHashMap<String, Value>;
 type MacroMap = FxHashMap<String, (Vec<String>, Vec<Statement>)>;
 
+/// Status of a check/validation performed during script execution.
 #[derive(Debug, Clone)]
 pub enum CheckStatus {
     Passed,
@@ -415,8 +417,8 @@ impl Executor {
                     };
                     self.blocks.push(msg);
                     self.tests_run += 1;
-                    if interactive.is_some() {
-                    }
+                    // TODO: Implement interactive prompts for user confirmation
+                    let _ = interactive;
                     return Ok(ExecutionResult::Blocked);
                 }
                 Ok(ExecutionResult::Continue)
@@ -432,8 +434,8 @@ impl Executor {
                     };
                     self.warnings.push(msg);
                     self.tests_run += 1;
-                    if interactive.is_some() {
-                    }
+                    // TODO: Implement interactive prompts for user confirmation
+                    let _ = interactive;
                 }
                 Ok(ExecutionResult::Continue)
             }
@@ -695,47 +697,6 @@ impl Executor {
         }
     }
 
-    fn interpolate_string(&self, s: &str) -> Result<String> {
-        let mut result = String::new();
-        let mut chars = s.chars().peekable();
-        
-        while let Some(ch) = chars.next() {
-            if ch == '$' && chars.peek() == Some(&'{') {
-                chars.next();
-                let mut expr_str = String::new();
-                let mut depth = 1;
-                for ch in chars.by_ref() {
-                    if ch == '{' {
-                        depth += 1;
-                        expr_str.push(ch);
-                    } else if ch == '}' {
-                        depth -= 1;
-                        if depth == 0 {
-                            break;
-                        }
-                        expr_str.push(ch);
-                    } else {
-                        expr_str.push(ch);
-                    }
-                }
-                
-                use githook_syntax::lexer::tokenize;
-                use githook_syntax::parser::Parser;
-                
-                let tokens = tokenize(&expr_str)?;
-                let mut expr_parser = Parser::new(tokens);
-                let expr = expr_parser.parse_expression()?;
-                
-                let value = self.eval_expression(&expr)?;
-                result.push_str(&value.display());
-            } else {
-                result.push(ch);
-            }
-        }
-        
-        Ok(result)
-    }
-    
     fn run_command(&self, cmd: &str) -> Result<()> {
         if self.verbose {
             println!("> Running: {}", cmd);
@@ -878,27 +839,5 @@ impl Executor {
 impl Default for Executor {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum ExecutionResult {
-    Continue,
-    Blocked,
-    Break,
-    ContinueLoop,
-}
-
-impl ExecutionResult {
-    pub fn should_stop(&self) -> bool {
-        matches!(self, ExecutionResult::Blocked)
-    }
-    
-    pub fn is_break(&self) -> bool {
-        matches!(self, ExecutionResult::Break)
-    }
-    
-    pub fn is_continue(&self) -> bool {
-        matches!(self, ExecutionResult::ContinueLoop)
     }
 }

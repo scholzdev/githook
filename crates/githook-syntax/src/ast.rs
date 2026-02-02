@@ -11,42 +11,42 @@ pub enum Expression {
     Number(f64, Span),
     Bool(bool, Span),
     Null(Span),
-    
+
     Identifier(String, Span),
-    
+
     PropertyAccess {
         chain: PropertyChain,
         span: Span,
     },
-    
+
     MethodCall {
         receiver: Box<Expression>,
         method: String,
         args: Vec<Expression>,
         span: Span,
     },
-    
+
     Binary {
         left: Box<Expression>,
         op: BinaryOp,
         right: Box<Expression>,
         span: Span,
     },
-    
+
     Unary {
         op: UnaryOp,
         expr: Box<Expression>,
         span: Span,
     },
-    
+
     Array(Vec<Expression>, Span),
-    
+
     Closure {
         param: String,
         body: Box<Expression>,
         span: Span,
     },
-    
+
     InterpolatedString {
         parts: Vec<StringPart>,
         span: Span,
@@ -88,38 +88,38 @@ pub enum Statement {
         command: String,
         span: Span,
     },
-    
+
     Print {
         message: Expression,
         span: Span,
     },
-    
+
     Block {
         message: String,
         span: Span,
     },
-    
+
     Warn {
         message: String,
         span: Span,
     },
-    
+
     Parallel {
         commands: ParallelCommands,
         span: Span,
     },
-    
+
     Allow {
         command: String,
         span: Span,
     },
-    
+
     Let {
         name: String,
         value: LetValue,
         span: Span,
     },
-    
+
     ForEach {
         collection: Expression,
         var: String,
@@ -127,68 +127,68 @@ pub enum Statement {
         body: Vec<Statement>,
         span: Span,
     },
-    
+
     If {
         condition: Expression,
         then_body: Vec<Statement>,
         else_body: Option<Vec<Statement>>,
         span: Span,
     },
-    
+
     Break {
         span: Span,
     },
-    
+
     Continue {
         span: Span,
     },
-    
+
     BlockIf {
         condition: Expression,
         message: Option<String>,
         interactive: Option<String>,
         span: Span,
     },
-    
+
     WarnIf {
         condition: Expression,
         message: Option<String>,
         interactive: Option<String>,
         span: Span,
     },
-    
+
     Match {
         subject: Expression,
         arms: Vec<MatchArm>,
         span: Span,
     },
-    
+
     MacroDef {
         name: String,
         params: MacroParams,
         body: Vec<Statement>,
         span: Span,
     },
-    
+
     MacroCall {
         namespace: Option<String>,
         name: String,
         args: Vec<Expression>,
         span: Span,
     },
-    
+
     Import {
         path: String,
         alias: Option<String>,
         span: Span,
     },
-    
+
     Use {
         package: String,
         alias: Option<String>,
         span: Span,
     },
-    
+
     Group {
         name: String,
         severity: Option<Severity>,
@@ -196,7 +196,7 @@ pub enum Statement {
         body: Vec<Statement>,
         span: Span,
     },
-    
+
     Try {
         body: Vec<Statement>,
         catch_var: Option<String>,
@@ -251,7 +251,7 @@ impl Expression {
             Expression::InterpolatedString { span, .. } => span,
         }
     }
-    
+
     pub fn is_truthy(&self) -> Option<bool> {
         match self {
             Expression::Bool(b, _) => Some(*b),

@@ -1,14 +1,20 @@
-use tower_lsp::lsp_types::*;
-use tower_lsp::Client;
 use githook_syntax::error::Span;
+use tower_lsp::Client;
+use tower_lsp::lsp_types::*;
 
 pub fn parse_error_to_diagnostic(error: &str, span: &Option<Span>, _source: &str) -> Diagnostic {
     let range = if let Some(span) = span {
         span_to_range(*span)
     } else {
         Range {
-            start: Position { line: 0, character: 0 },
-            end: Position { line: 0, character: 0 },
+            start: Position {
+                line: 0,
+                character: 0,
+            },
+            end: Position {
+                line: 0,
+                character: 0,
+            },
         }
     };
 
@@ -39,7 +45,5 @@ pub fn span_to_range(span: Span) -> Range {
 }
 
 pub async fn publish_diagnostics(client: &Client, uri: Url, diagnostics: Vec<Diagnostic>) {
-    client
-        .publish_diagnostics(uri, diagnostics, None)
-        .await;
+    client.publish_diagnostics(uri, diagnostics, None).await;
 }

@@ -1,5 +1,5 @@
-use tower_lsp::lsp_types::*;
 use githook_syntax::Statement;
+use tower_lsp::lsp_types::*;
 
 pub fn get_legend() -> SemanticTokensLegend {
     SemanticTokensLegend {
@@ -23,24 +23,28 @@ pub fn get_legend() -> SemanticTokensLegend {
 
 pub fn get_semantic_tokens(ast: &Option<Vec<Statement>>, text: &str) -> SemanticTokens {
     let mut tokens = Vec::new();
-    
+
     collect_comments_raw(text, &mut tokens);
-    
+
     if let Some(statements) = ast {
         for stmt in statements {
             collect_tokens_raw(stmt, &mut tokens);
         }
     }
-    
-    tokens.sort_by(|a, b| {
-        a.line.cmp(&b.line).then(a.start.cmp(&b.start))
-    });
-    
+
+    tokens.sort_by(|a, b| a.line.cmp(&b.line).then(a.start.cmp(&b.start)));
+
     let mut builder = SemanticTokensBuilder::new();
     for token in tokens {
-        builder.push(token.line, token.start, token.length, token.token_type, token.modifiers);
+        builder.push(
+            token.line,
+            token.start,
+            token.length,
+            token.token_type,
+            token.modifiers,
+        );
     }
-    
+
     builder.build()
 }
 
@@ -66,15 +70,15 @@ fn collect_comments_raw(text: &str, tokens: &mut Vec<RawToken>) {
             });
         }
     }
-    
+
     let mut in_comment = false;
     let mut comment_start_line = 0;
     let mut comment_start_col = 0;
-    
+
     for (line_idx, line) in text.lines().enumerate() {
         let mut col = 0;
         let chars: Vec<char> = line.chars().collect();
-        
+
         while col < chars.len() {
             if !in_comment {
                 if col + 1 < chars.len() && chars[col] == '/' && chars[col + 1] == '*' {
@@ -134,7 +138,9 @@ fn collect_comments_raw(text: &str, tokens: &mut Vec<RawToken>) {
 
 fn collect_tokens_raw(stmt: &Statement, tokens: &mut Vec<RawToken>) {
     match stmt {
-        Statement::MacroDef { name, span, body, .. } => {
+        Statement::MacroDef {
+            name, span, body, ..
+        } => {
             tokens.push(RawToken {
                 line: (span.line - 1) as u32,
                 start: (span.col - 1) as u32,
@@ -142,7 +148,7 @@ fn collect_tokens_raw(stmt: &Statement, tokens: &mut Vec<RawToken>) {
                 token_type: 0,
                 modifiers: 0,
             });
-            
+
             tokens.push(RawToken {
                 line: (span.line - 1) as u32,
                 start: (span.col + 6) as u32,
@@ -150,12 +156,17 @@ fn collect_tokens_raw(stmt: &Statement, tokens: &mut Vec<RawToken>) {
                 token_type: 1,
                 modifiers: 2,
             });
-            
+
             for inner_stmt in body {
                 collect_tokens_raw(inner_stmt, tokens);
             }
         }
-        Statement::MacroCall { name, namespace, span, .. } => {
+        Statement::MacroCall {
+            name,
+            namespace,
+            span,
+            ..
+        } => {
             if let Some(ns) = namespace {
                 tokens.push(RawToken {
                     line: (span.line - 1) as u32,
@@ -190,7 +201,11 @@ fn collect_tokens_raw(stmt: &Statement, tokens: &mut Vec<RawToken>) {
                 modifiers: 0,
             });
         }
-        Statement::If { then_body, else_body, .. } => {
+        Statement::If {
+            then_body,
+            else_body,
+            ..
+        } => {
             for inner_stmt in then_body {
                 collect_tokens_raw(inner_stmt, tokens);
             }
@@ -223,7 +238,7 @@ impl SemanticTokensBuilder {
             prev_start: 0,
         }
     }
-    
+
     fn push(&mut self, line: u32, start: u32, length: u32, token_type: u32, token_modifiers: u32) {
         let delta_line = line - self.prev_line;
         let delta_start = if delta_line == 0 {
@@ -231,7 +246,7 @@ impl SemanticTokensBuilder {
         } else {
             start
         };
-        
+
         self.tokens.push(SemanticToken {
             delta_line,
             delta_start,
@@ -239,11 +254,11 @@ impl SemanticTokensBuilder {
             token_type,
             token_modifiers_bitset: token_modifiers,
         });
-        
+
         self.prev_line = line;
         self.prev_start = start;
     }
-    
+
     fn build(self) -> SemanticTokens {
         SemanticTokens {
             result_id: None,

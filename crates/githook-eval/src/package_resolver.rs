@@ -1,18 +1,16 @@
-use std::path::PathBuf;
-use std::fs;
-use anyhow::{Result, bail, anyhow};
-use std::sync::Mutex;
+use anyhow::{Result, anyhow, bail};
 use lru::LruCache;
-use std::num::NonZeroUsize;
 use once_cell::sync::Lazy;
+use std::fs;
+use std::num::NonZeroUsize;
+use std::path::PathBuf;
+use std::sync::Mutex;
 
-static PACKAGE_CACHE: Lazy<Mutex<LruCache<String, String>>> = Lazy::new(|| {
-    Mutex::new(LruCache::new(NonZeroUsize::new(50).unwrap()))
-});
+static PACKAGE_CACHE: Lazy<Mutex<LruCache<String, String>>> =
+    Lazy::new(|| Mutex::new(LruCache::new(NonZeroUsize::new(50).unwrap())));
 
 fn local_packages_dir() -> Result<PathBuf> {
-    let home = dirs::home_dir()
-        .ok_or_else(|| anyhow!("Could not determine home directory"))?;
+    let home = dirs::home_dir().ok_or_else(|| anyhow!("Could not determine home directory"))?;
     Ok(home.join(".githook").join("packages"))
 }
 
@@ -27,26 +25,35 @@ fn validate_package_identifier(identifier: &str) -> Result<()> {
     if identifier.is_empty() {
         bail!("Package identifier cannot be empty");
     }
-    
-    if !identifier.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
-        bail!("Invalid package identifier '{}': only alphanumeric, '-', and '_' allowed", identifier);
+
+    if !identifier
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
+        bail!(
+            "Invalid package identifier '{}': only alphanumeric, '-', and '_' allowed",
+            identifier
+        );
     }
-    
+
     if identifier.contains("..") || identifier.contains('/') || identifier.contains('\\') {
-        bail!("Invalid package identifier '{}': path traversal not allowed", identifier);
+        bail!(
+            "Invalid package identifier '{}': path traversal not allowed",
+            identifier
+        );
     }
-    
+
     if identifier.len() > 100 {
         bail!("Package identifier too long (max 100 characters)");
     }
-    
+
     Ok(())
 }
 
 pub fn resolve_package_path(namespace: &str, name: &str) -> Result<PathBuf> {
     validate_package_identifier(namespace)?;
     validate_package_identifier(name)?;
-    
+
     let base_dir = match namespace {
         "local" => local_packages_dir()?,
         _ => cache_packages_dir()?,
@@ -61,37 +68,41 @@ pub fn resolve_package_path(namespace: &str, name: &str) -> Result<PathBuf> {
 }
 
 fn validate_repo_url(repo_url: &str) -> Result<()> {
-    if !repo_url.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '/') {
+    if !repo_url
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '/')
+    {
         bail!("Invalid repository URL format: '{}'", repo_url);
     }
-    
+
     let parts: Vec<&str> = repo_url.split('/').collect();
     if parts.len() != 2 {
-        bail!("Repository URL must be in format 'owner/repo', got: '{}'", repo_url);
+        bail!(
+            "Repository URL must be in format 'owner/repo', got: '{}'",
+            repo_url
+        );
     }
-    
+
     if parts[0].is_empty() || parts[1].is_empty() {
         bail!("Repository owner and name cannot be empty");
     }
-    
+
     if parts[0].len() > 100 || parts[1].len() > 100 {
         bail!("Repository owner or name too long (max 100 characters each)");
     }
-    
+
     Ok(())
 }
 
-pub fn load_package(
-    namespace: &str,
-    name: &str,
-) -> Result<String> {
+pub fn load_package(namespace: &str, name: &str) -> Result<String> {
     let cache_key = format!("{}::{}", namespace, name);
-    
+
     if let Ok(mut cache) = PACKAGE_CACHE.lock()
-        && let Some(cached_content) = cache.get(&cache_key) {
-            return Ok(cached_content.clone());
-        }
-    
+        && let Some(cached_content) = cache.get(&cache_key)
+    {
+        return Ok(cached_content.clone());
+    }
+
     let path = resolve_package_path(namespace, name)?;
     let etag_path = path.with_extension("etag");
 
@@ -99,12 +110,16 @@ pub fn load_package(
         if path.exists() {
             fs::read_to_string(&path)?
         } else {
-            bail!("Package not found: @{}/{} (local namespace only checks filesystem)", namespace, name);
+            bail!(
+                "Package not found: @{}/{} (local namespace only checks filesystem)",
+                namespace,
+                name
+            );
         }
     } else {
         let repo_url = get_default_repo_url(namespace);
         validate_repo_url(&repo_url)?;
-        
+
         let url = format!(
             "https://raw.githubusercontent.com/{}/refs/heads/main/{}/{}/{}.ghook",
             repo_url, namespace, name, name
@@ -116,34 +131,39 @@ pub fn load_package(
 
         if path.exists() && etag_path.exists() {
             let cached_etag = fs::read_to_string(&etag_path).ok();
-            
+
             if let Some(etag) = cached_etag {
-                let response = client.get(&url)
+                let response = client
+                    .get(&url)
                     .header("If-None-Match", etag.trim())
                     .send()?;
-                
+
                 if response.status() == 304 {
                     if cfg!(debug_assertions) {
-                        eprintln!(" Package @{}/{} is up-to-date (using cache)", namespace, name);
+                        eprintln!(
+                            " Package @{}/{} is up-to-date (using cache)",
+                            namespace, name
+                        );
                     }
                     fs::read_to_string(&path)?
                 } else if response.status().is_success() {
-                    let new_etag = response.headers()
+                    let new_etag = response
+                        .headers()
                         .get("etag")
                         .and_then(|v| v.to_str().ok())
                         .map(|s| s.to_string());
-                
+
                     let content = response.text()?;
-                    
+
                     if let Some(parent) = path.parent() {
                         fs::create_dir_all(parent)?;
                     }
                     fs::write(&path, &content)?;
-                    
+
                     if let Some(tag) = new_etag {
                         let _ = fs::write(&etag_path, tag);
                     }
-                    
+
                     eprintln!("Package @{}/{} updated", namespace, name);
                     content
                 } else {
@@ -151,7 +171,7 @@ pub fn load_package(
                 }
             } else {
                 let response = client.get(&url).send()?;
-                
+
                 if !response.status().is_success() {
                     bail!(
                         "Failed to fetch package @{}/{} from {}: HTTP {}",
@@ -161,31 +181,32 @@ pub fn load_package(
                         response.status()
                     );
                 }
-                
-                let etag = response.headers()
+
+                let etag = response
+                    .headers()
                     .get("etag")
                     .and_then(|v| v.to_str().ok())
                     .map(|s| s.to_string());
-                
+
                 let content = response.text()?;
-                
+
                 if let Some(parent) = path.parent() {
                     fs::create_dir_all(parent)?;
                 }
                 fs::write(&path, &content)?;
-                
+
                 if let Some(tag) = etag {
                     let _ = fs::write(&etag_path, tag);
                 }
-                
+
                 eprintln!("Package @{}/{} cached successfully", namespace, name);
                 content
             }
         } else {
             eprintln!("Fetching package @{}/{}...", namespace, name);
-            
+
             let response = client.get(&url).send()?;
-            
+
             if !response.status().is_success() {
                 bail!(
                     "Failed to fetch package @{}/{} from {}: HTTP {}",
@@ -195,40 +216,37 @@ pub fn load_package(
                     response.status()
                 );
             }
-            
-            let etag = response.headers()
+
+            let etag = response
+                .headers()
                 .get("etag")
                 .and_then(|v| v.to_str().ok())
                 .map(|s| s.to_string());
-            
+
             let content = response.text()?;
-            
+
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
             }
             fs::write(&path, &content)?;
-            
+
             if let Some(tag) = etag {
                 let _ = fs::write(&etag_path, tag);
             }
-            
+
             eprintln!("Package @{}/{} cached successfully", namespace, name);
             content
         }
     };
-    
+
     if let Ok(mut cache) = PACKAGE_CACHE.lock() {
         cache.put(cache_key, content.clone());
     }
-    
+
     Ok(content)
 }
 
-pub async fn load_or_fetch_package(
-    namespace: &str,
-    name: &str,
-    repo_url: &str,
-) -> Result<String> {
+pub async fn load_or_fetch_package(namespace: &str, name: &str, repo_url: &str) -> Result<String> {
     let path = resolve_package_path(namespace, name)?;
 
     if path.exists() {
@@ -244,7 +262,7 @@ pub async fn load_or_fetch_package(
     }
 
     validate_repo_url(repo_url)?;
-    
+
     let url = format!(
         "https://raw.githubusercontent.com/{}/refs/heads/main/{}/{}/{}.ghook",
         repo_url, namespace, name, name
@@ -255,7 +273,7 @@ pub async fn load_or_fetch_package(
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
-    
+
     let response = client.get(&url).send().await?;
 
     if !response.status().is_success() {
