@@ -380,6 +380,14 @@ impl Value {
                 ctx.call_method(name, &string_args?)
             }
             Value::Array(arr) => {
+                // Special handling for first() and last() to return the actual Value
+                if name == "first" && args.is_empty() {
+                    return Ok(arr.first().cloned().unwrap_or(Value::Null));
+                }
+                if name == "last" && args.is_empty() {
+                    return Ok(arr.last().cloned().unwrap_or(Value::Null));
+                }
+                
                 let ctx = ArrayContext::new(arr.clone());
                 let string_args: Result<Vec<&str>> = args.iter().map(|v| {
                     v.as_string().map(|s| Box::leak(s.into_boxed_str()) as &str)

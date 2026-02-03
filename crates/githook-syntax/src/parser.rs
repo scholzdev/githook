@@ -284,16 +284,14 @@ impl Parser {
                             span,
                         };
                     } else {
-                        let span = *expr.span();
-                        let mut chain = match expr {
-                            Expression::Identifier(id, _) => SmallVec::from_vec(vec![id]),
-                            Expression::PropertyAccess { chain, .. } => chain,
-                            _ => bail!("Cannot access property on non-identifier expression"),
+                        let end_span = self.peek_span().unwrap_or(*expr.span());
+                        let span = expr.span().merge(&end_span);
+
+                        expr = Expression::PropertyAccess {
+                            receiver: Box::new(expr),
+                            property: name,
+                            span,
                         };
-
-                        chain.push(name);
-
-                        expr = Expression::PropertyAccess { chain, span };
                     }
                 }
                 Token::LeftParen => {

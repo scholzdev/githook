@@ -109,9 +109,34 @@ pub fn get_completions(doc: &DocumentState, position: Position) -> Vec<Completio
     }
 
     for label in &["git", "true", "false", "null"] {
+        let detail = match *label {
+            "git" => "Git - Git operations and repository info",
+            "true" => "bool - Boolean true value",
+            "false" => "bool - Boolean false value",
+            "null" => "null - Null value",
+            _ => "",
+        };
+        
         completions.push(CompletionItem {
             label: label.to_string(),
             kind: Some(CompletionItemKind::CONSTANT),
+            detail: Some(detail.to_string()),
+            ..Default::default()
+        });
+    }
+
+    for (label, detail) in &[
+        ("http", "Http - HTTP client for making requests"),
+        ("env", "Env - Environment variables"),
+        ("file", "File - File system operations"),
+        ("dir", "Dir - Directory operations"),
+        ("glob", "Glob - Pattern matching"),
+        ("exec", "Exec - Execute commands"),
+    ] {
+        completions.push(CompletionItem {
+            label: label.to_string(),
+            kind: Some(CompletionItemKind::FUNCTION),
+            detail: Some(detail.to_string()),
             ..Default::default()
         });
     }
@@ -161,14 +186,51 @@ fn infer_expression_type(expr: &Expression) -> Option<String> {
         Expression::Number(_, _) => Some("number".to_string()),
         Expression::Bool(_, _) => Some("bool".to_string()),
         Expression::Array(_, _) => Some("array".to_string()),
-        Expression::PropertyAccess { chain, .. } => infer_property_chain_type(chain),
-        Expression::MethodCall { method, .. } => infer_method_return_type(method),
+        Expression::PropertyAccess { receiver, property, .. } => {
+            infer_property_access_type(receiver, property)
+        }
+        Expression::MethodCall { receiver, method, .. } => {
+            if let Some(return_type) = infer_method_return_type(method) {
+                Some(return_type)
+            } else {
+                infer_expression_type(receiver)
+            }
+        }
+        Expression::Identifier(name, _) => {
+            match name.as_str() {
+                "git" => Some("git".to_string()),
+                "http" => Some("http".to_string()),
+                "env" => Some("env".to_string()),
+                _ => None,
+            }
+        }
         _ => None,
     }
 }
 
-fn infer_property_chain_type(_chain: &[String]) -> Option<String> {
-    Some("string".to_string())
+fn infer_property_access_type(receiver: &Expression, property: &str) -> Option<String> {
+    let receiver_type = infer_expression_type(receiver)?;
+    
+    match (receiver_type.as_str(), property) {
+        ("git", "files") => Some("files".to_string()),
+        ("git", "diff") => Some("diff".to_string()),
+        ("git", "branch") => Some("branch".to_string()),
+        ("git", "commit") => Some("commit".to_string()),
+        ("git", "author") => Some("author".to_string()),
+        ("git", "remote") => Some("remote".to_string()),
+        ("git", "stats") => Some("stats".to_string()),
+        ("git", "merge") => Some("merge".to_string()),
+        
+        ("files", "all" | "staged" | "modified" | "added" | "deleted" | "unstaged") => {
+            Some("array".to_string())
+        }
+        
+        ("array", _) if property == "first" || property == "last" => {
+            Some("file".to_string())
+        }
+        
+        _ => Some("string".to_string()),
+    }
 }
 
 fn infer_method_return_type(method: &str) -> Option<String> {
@@ -301,6 +363,43 @@ fn get_property_completions(prefix: &str) -> Vec<CompletionItem> {
             ("additions", "Number - Lines added"),
             ("deletions", "Number - Lines deleted"),
             ("modified_lines", "Number - Total lines modified"),
+        ],
+        "file" | "f" => &[
+            ("name", "String - Filename"),
+            ("path", "PathContext - Path object"),
+            ("basename", "String - Base name without extension"),
+            ("extension", "String - File extension"),
+            ("dirname", "String - Directory path"),
+            ("content", "String - File content"),
+            ("diff", "String - Staged diff for file"),
+            ("size", "Number - File size in bytes"),
+            ("exists()", "bool - Check if file exists"),
+            ("is_file()", "bool - Is regular file"),
+            ("is_dir()", "bool - Is directory"),
+            ("is_readable()", "bool - Is readable"),
+            ("is_executable()", "bool - Is executable"),
+            ("is_symlink()", "bool - Is symbolic link"),
+            ("is_absolute()", "bool - Is absolute path"),
+            ("is_relative()", "bool - Is relative path"),
+            ("is_hidden()", "bool - Is hidden file"),
+            ("modified_time()", "Number - Last modified timestamp"),
+            ("created_time()", "Number - Creation timestamp"),
+            ("permissions()", "Number - File permissions"),
+            ("contains(pattern)", "bool - Contains text pattern"),
+            ("starts_with(prefix)", "bool - Path starts with"),
+            ("ends_with(suffix)", "bool - Path ends with"),
+        ],
+        "array" => &[
+            ("length", "Number - Array length"),
+            ("first()", "Value - First element"),
+            ("last()", "Value - Last element"),
+            ("is_empty()", "bool - Is array empty"),
+            ("sum()", "Number - Sum of numeric elements"),
+            ("filter(fn)", "Array - Filter elements"),
+            ("map(fn)", "Array - Map elements"),
+            ("find(fn)", "Value - Find first matching"),
+            ("any(fn)", "bool - Any element matches"),
+            ("all(fn)", "bool - All elements match"),
         ],
         p if p.starts_with("f") || p.starts_with("file") => &[
             ("name", "String - Filename"),

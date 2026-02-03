@@ -1,7 +1,6 @@
 use crate::error::Span;
 use smallvec::SmallVec;
 
-type PropertyChain = SmallVec<[String; 4]>;
 type MacroParams = SmallVec<[String; 4]>;
 type ParallelCommands = SmallVec<[String; 4]>;
 
@@ -15,7 +14,8 @@ pub enum Expression {
     Identifier(String, Span),
 
     PropertyAccess {
-        chain: PropertyChain,
+        receiver: Box<Expression>,
+        property: String,
         span: Span,
     },
 

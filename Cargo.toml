@@ -15,6 +15,10 @@ version = "0.0.1"
 edition = "2024"
 authors = ["Florian Scholz <me@florianscholz.dev>"]
 license = "MIT"
+repository = "https://github.com/scholzf/githook"
+homepage = "https://github.com/scholzf/githook"
+keywords = ["git", "hooks", "githooks", "pre-commit", "lsp"]
+categories = ["command-line-utilities", "development-tools"]
 
 [workspace.dependencies]
 clap = { version = "4.5.55", features = ["derive"] }
@@ -31,3 +35,10 @@ githook-syntax = { path = "crates/githook-syntax" }
 githook-eval = { path = "crates/githook-eval" }
 githook-git = { path = "crates/githook-git" }
 githook-macros = { path = "crates/githook-macros" }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"

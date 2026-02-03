@@ -150,27 +150,26 @@ fn infer_expr_type(expr: &Expression) -> Option<String> {
         Expression::Array(_, _) => Some("Array".to_string()),
         Expression::Null(_) => Some("Null".to_string()),
 
-        Expression::PropertyAccess { chain, .. } => {
-            if chain.is_empty() {
-                return None;
-            }
-
-            if chain.len() >= 2 && chain[0] == "git" {
-                match chain[1].as_str() {
-                    "branch" if chain.len() == 2 => Some("BranchInfo".to_string()),
-                    "author" if chain.len() == 2 => Some("AuthorInfo".to_string()),
-                    "commit" if chain.len() == 2 => Some("CommitInfo".to_string()),
-                    "files" => Some("FilesCollection".to_string()),
-                    "staged" | "all" | "modified" | "added" | "deleted" | "unstaged" => {
-                        Some("Array<File>".to_string())
+        Expression::PropertyAccess { receiver, property, .. } => {
+            if let Expression::Identifier(name, _) = receiver.as_ref() {
+                if name == "git" {
+                    match property.as_str() {
+                        "branch" => Some("BranchInfo".to_string()),
+                        "author" => Some("AuthorInfo".to_string()),
+                        "commit" => Some("CommitInfo".to_string()),
+                        "files" => Some("FilesCollection".to_string()),
+                        "staged" | "all" | "modified" | "added" | "deleted" | "unstaged" => {
+                            Some("Array<File>".to_string())
+                        }
+                        "diff" => Some("DiffCollection".to_string()),
+                        "added_lines" | "removed_lines" => Some("Array<String>".to_string()),
+                        _ => Some("String".to_string()),
                     }
-                    "diff" => Some("DiffCollection".to_string()),
-                    "added_lines" | "removed_lines" => Some("Array<String>".to_string()),
-                    _ if chain.len() >= 3 => Some("String".to_string()),
-                    _ => None,
+                } else {
+                    Some("String".to_string())
                 }
             } else {
-                None
+                Some("String".to_string())
             }
         }
 

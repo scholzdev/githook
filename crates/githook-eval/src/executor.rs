@@ -90,8 +90,9 @@ impl Executor {
                 }
             }
             
-            Expression::PropertyAccess { chain, span: _ } => {
-                self.eval_property_chain(chain)
+            Expression::PropertyAccess { receiver, property, span: _ } => {
+                let obj = self.eval_expression(receiver)?;
+                obj.get_property(property)
             }
             
             Expression::MethodCall { receiver, method, args, span: _ } => {
@@ -157,26 +158,6 @@ impl Executor {
                 bail!("Closures cannot be evaluated directly; they must be used as arguments to methods like filter() or map()")
             }
         }
-    }
-    
-    fn eval_property_chain(&self, chain: &[String]) -> Result<Value> {
-        if chain.is_empty() {
-            bail!("Empty property chain");
-        }
-        
-        let mut current = match chain[0].as_str() {
-            "git" => self.create_git_object(),
-            "env" => Value::env_object(),
-            _ => self.variables.get(&chain[0])
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("Variable '{}' not found", chain[0]))?,
-        };
-        
-        for prop in &chain[1..] {
-            current = current.get_property(prop)?;
-        }
-        
-        Ok(current)
     }
     
     fn eval_binary_op(&self, left: &Value, op: BinaryOp, right: &Value) -> Result<Value> {
