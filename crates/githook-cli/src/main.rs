@@ -1,3 +1,10 @@
+//! # githook-cli
+//!
+//! Command-line interface for the Githook scripting language.
+//!
+//! Detects the Git hook type from the executable name (or an explicit argument), locates the corresponding `.ghook` script, and runs it
+//! through the Githook interpreter.
+
 mod errors;
 mod updater;
 
@@ -89,13 +96,18 @@ fn main() -> Result<()> {
     let statements = match parser::parse(tokens) {
         Ok(stmts) => stmts,
         Err(parse_error) => {
-            let enhanced = EnhancedError::new(format!("Parse error: {}", parse_error))
+            let mut enhanced = EnhancedError::new(format!("Parse error: {}", parse_error))
                 .with_file(config_path.display().to_string())
                 .with_source(source.clone())
                 .with_suggestion("Check that all blocks are properly closed with { and }")
                 .with_help(
                     "Common issues: missing closing brace, missing semicolon, typo in keyword",
                 );
+            if let Some(pe) = parse_error.downcast_ref::<githook_syntax::ParseError>()
+                && let Some(span) = pe.span()
+            {
+                enhanced = enhanced.with_span(span);
+            }
             enhanced.display();
             std::process::exit(1);
         }

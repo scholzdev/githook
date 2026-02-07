@@ -50,6 +50,7 @@ fn validate_package_identifier(identifier: &str) -> Result<()> {
     Ok(())
 }
 
+/// Resolves a package identifier (`@namespace/name`) to its filesystem path.
 pub fn resolve_package_path(namespace: &str, name: &str) -> Result<PathBuf> {
     validate_package_identifier(namespace)?;
     validate_package_identifier(name)?;
@@ -94,6 +95,7 @@ fn validate_repo_url(repo_url: &str) -> Result<()> {
     Ok(())
 }
 
+/// Loads a package's source code, downloading from GitHub if not cached.
 pub fn load_package(namespace: &str, name: &str) -> Result<String> {
     let cache_key = format!("{}::{}", namespace, name);
 
@@ -296,6 +298,7 @@ pub async fn load_or_fetch_package(namespace: &str, name: &str, repo_url: &str) 
     Ok(content)
 }
 
+/// Returns the default GitHub repository URL for a package namespace.
 pub fn get_default_repo_url(_namespace: &str) -> String {
     "scholzdev/githooks-packages".to_string()
 }

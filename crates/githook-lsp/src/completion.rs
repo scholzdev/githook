@@ -116,7 +116,7 @@ pub fn get_completions(doc: &DocumentState, position: Position) -> Vec<Completio
             "null" => "null - Null value",
             _ => "",
         };
-        
+
         completions.push(CompletionItem {
             label: label.to_string(),
             kind: Some(CompletionItemKind::CONSTANT),
@@ -186,31 +186,31 @@ fn infer_expression_type(expr: &Expression) -> Option<String> {
         Expression::Number(_, _) => Some("number".to_string()),
         Expression::Bool(_, _) => Some("bool".to_string()),
         Expression::Array(_, _) => Some("array".to_string()),
-        Expression::PropertyAccess { receiver, property, .. } => {
-            infer_property_access_type(receiver, property)
-        }
-        Expression::MethodCall { receiver, method, .. } => {
+        Expression::PropertyAccess {
+            receiver, property, ..
+        } => infer_property_access_type(receiver, property),
+        Expression::MethodCall {
+            receiver, method, ..
+        } => {
             if let Some(return_type) = infer_method_return_type(method) {
                 Some(return_type)
             } else {
                 infer_expression_type(receiver)
             }
         }
-        Expression::Identifier(name, _) => {
-            match name.as_str() {
-                "git" => Some("git".to_string()),
-                "http" => Some("http".to_string()),
-                "env" => Some("env".to_string()),
-                _ => None,
-            }
-        }
+        Expression::Identifier(name, _) => match name.as_str() {
+            "git" => Some("git".to_string()),
+            "http" => Some("http".to_string()),
+            "env" => Some("env".to_string()),
+            _ => None,
+        },
         _ => None,
     }
 }
 
 fn infer_property_access_type(receiver: &Expression, property: &str) -> Option<String> {
     let receiver_type = infer_expression_type(receiver)?;
-    
+
     match (receiver_type.as_str(), property) {
         ("git", "files") => Some("files".to_string()),
         ("git", "diff") => Some("diff".to_string()),
@@ -220,22 +220,20 @@ fn infer_property_access_type(receiver: &Expression, property: &str) -> Option<S
         ("git", "remote") => Some("remote".to_string()),
         ("git", "stats") => Some("stats".to_string()),
         ("git", "merge") => Some("merge".to_string()),
-        
+
         ("files", "all" | "staged" | "modified" | "added" | "deleted" | "unstaged") => {
             Some("array".to_string())
         }
-        
-        ("array", _) if property == "first" || property == "last" => {
-            Some("file".to_string())
-        }
-        
+
+        ("array", _) if property == "first" || property == "last" => Some("file".to_string()),
+
         _ => Some("string".to_string()),
     }
 }
 
 fn infer_method_return_type(method: &str) -> Option<String> {
     match method {
-        "upper" | "lower" | "trim" | "reverse" | "replace" => Some("string".to_string()),
+        "upper" | "lower" | "trim" | "reverse" | "replace" | "slice" => Some("string".to_string()),
         "split" | "lines" => Some("array".to_string()),
         "len" | "count" => Some("number".to_string()),
         "contains" | "starts_with" | "ends_with" => Some("bool".to_string()),
@@ -548,6 +546,12 @@ fn get_string_method_completions() -> Vec<CompletionItem> {
             label: "lines()".to_string(),
             kind: Some(CompletionItemKind::METHOD),
             detail: Some("Array<String> - Split into lines".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "slice(start, end)".to_string(),
+            kind: Some(CompletionItemKind::METHOD),
+            detail: Some("String - Substring from start to end (exclusive)".to_string()),
             ..Default::default()
         },
     ]

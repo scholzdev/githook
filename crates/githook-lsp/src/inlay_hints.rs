@@ -150,7 +150,9 @@ fn infer_expr_type(expr: &Expression) -> Option<String> {
         Expression::Array(_, _) => Some("Array".to_string()),
         Expression::Null(_) => Some("Null".to_string()),
 
-        Expression::PropertyAccess { receiver, property, .. } => {
+        Expression::PropertyAccess {
+            receiver, property, ..
+        } => {
             if let Expression::Identifier(name, _) = receiver.as_ref() {
                 if name == "git" {
                     match property.as_str() {

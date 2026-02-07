@@ -1,146 +1,184 @@
-use anyhow::{Result, bail};
-use ahash::{HashMap, HashMapExt};
 use crate::contexts::{
-    StringContext, NumberContext, ArrayContext,
-    FileContext, PathContext,
-    GitContext, BranchInfo, CommitInfo, AuthorInfo, RemoteInfo, DiffStats, FilesCollection,
-    HttpResponseContext, HttpContext,
+    ArrayContext, AuthorInfo, BranchInfo, CommitInfo, DiffStats, FileContext, FilesCollection,
+    GitContext, HttpContext, HttpResponseContext, NumberContext, PathContext, RemoteInfo,
+    StringContext,
 };
+use ahash::{HashMap, HashMapExt};
+use anyhow::{Result, bail};
 
+/// Typed context attached to an [`Object`], providing domain-specific
+/// property and method dispatch.
+///
+/// Each object carries at most one context. The executor matches on this
+/// enum to resolve property accesses and method calls.
+#[derive(Debug, Clone)]
+pub enum Context {
+    /// File I/O context.
+    File(FileContext),
+    /// Path helper context.
+    Path(PathContext),
+    /// Root Git context (`git.*`), boxed to reduce enum size.
+    Git(Box<GitContext>),
+    /// Files collection context (`git.files.*`).
+    FilesCollection(FilesCollection),
+    /// Branch info context (`git.branch.*`).
+    Branch(BranchInfo),
+    /// Commit info context (`git.commit.*`).
+    Commit(CommitInfo),
+    /// Author info context (`git.author.*`).
+    Author(AuthorInfo),
+    /// Remote info context (`git.remote.*`).
+    Remote(RemoteInfo),
+    /// Diff statistics context (`git.stats.*`).
+    Stats(DiffStats),
+    /// String methods context.
+    String(StringContext),
+    /// Number methods context.
+    Number(NumberContext),
+    /// Array methods context.
+    Array(ArrayContext),
+    /// HTTP response context.
+    HttpResponse(HttpResponseContext),
+    /// HTTP client context.
+    Http(HttpContext),
+}
+
+/// A runtime value in the Githook scripting language.
+///
+/// All expressions evaluate to a `Value`. The type system is dynamically
+/// typed — conversions happen at runtime (see [`as_string`](`Value::as_string`),
+/// [`as_number`](`Value::as_number`), [`is_truthy`](`Value::is_truthy`)).
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum Value {
+    /// A UTF-8 string.
     String(String),
+    /// A 64-bit floating point number.
     Number(f64),
+    /// A boolean (`true`/`false`).
     Bool(bool),
+    /// The `null` value.
     Null,
-    
+    /// An ordered list of values.
     Array(Vec<Value>),
+    /// A named object with typed context.
     Object(Object),
 }
 
+/// A named object that carries dynamic properties and an optional typed context.
+///
+/// Objects represent the Git model (`git`, `git.branch`, files, etc.) and
+/// user-created objects. The `type_name` distinguishes them, and the
+/// [`context`](`Object::context`) provides typed access to domain-specific methods.
 #[derive(Debug, Clone)]
 pub struct Object {
+    /// The type name (e.g. `"Git"`, `"File"`, `"String"`).
     pub type_name: String,
+    /// Dynamic key-value properties.
     pub properties: HashMap<String, Value>,
-    pub file_context: Option<FileContext>,
-    pub path_context: Option<PathContext>,
-    pub git_context: Option<GitContext>,
-    pub files_context: Option<FilesCollection>,
-    pub branch_context: Option<BranchInfo>,
-    pub commit_context: Option<CommitInfo>,
-    pub author_context: Option<AuthorInfo>,
-    pub remote_context: Option<RemoteInfo>,
-    pub stats_context: Option<DiffStats>,
-    pub string_context: Option<StringContext>,
-    pub number_context: Option<NumberContext>,
-    pub array_context: Option<ArrayContext>,
-    pub http_response_context: Option<HttpResponseContext>,
-    pub http_context: Option<HttpContext>,
+    /// Optional typed context for property/method dispatch.
+    pub context: Option<Context>,
 }
 
 impl Object {
+    /// Creates a new object with the given type name and no properties.
     pub fn new(type_name: impl Into<String>) -> Self {
         Self {
             type_name: type_name.into(),
             properties: HashMap::new(),
-            file_context: None,
-            path_context: None,
-            git_context: None,
-            files_context: None,
-            branch_context: None,
-            commit_context: None,
-            author_context: None,
-            remote_context: None,
-            stats_context: None,
-            string_context: None,
-            number_context: None,
-            array_context: None,
-            http_response_context: None,
-            http_context: None,
+            context: None,
         }
     }
-    
+
+    /// Builder: adds a dynamic property.
     pub fn with_property(mut self, key: impl Into<String>, value: Value) -> Self {
         self.properties.insert(key.into(), value);
         self
     }
-    
+
+    /// Builder: sets the typed context.
+    pub fn with_context(mut self, ctx: Context) -> Self {
+        self.context = Some(ctx);
+        self
+    }
+
     pub fn with_file_context(mut self, ctx: FileContext) -> Self {
-        self.file_context = Some(ctx);
+        self.context = Some(Context::File(ctx));
         self
     }
-    
+
     pub fn with_path_context(mut self, ctx: PathContext) -> Self {
-        self.path_context = Some(ctx);
+        self.context = Some(Context::Path(ctx));
         self
     }
-    
+
     pub fn with_git_context(mut self, ctx: GitContext) -> Self {
-        self.git_context = Some(ctx);
+        self.context = Some(Context::Git(Box::new(ctx)));
         self
     }
-    
+
     pub fn with_files_context(mut self, ctx: FilesCollection) -> Self {
-        self.files_context = Some(ctx);
+        self.context = Some(Context::FilesCollection(ctx));
         self
     }
-    
+
     pub fn with_branch_context(mut self, ctx: BranchInfo) -> Self {
-        self.branch_context = Some(ctx);
+        self.context = Some(Context::Branch(ctx));
         self
     }
-    
+
     pub fn with_commit_context(mut self, ctx: CommitInfo) -> Self {
-        self.commit_context = Some(ctx);
+        self.context = Some(Context::Commit(ctx));
         self
     }
-    
+
     pub fn with_author_context(mut self, ctx: AuthorInfo) -> Self {
-        self.author_context = Some(ctx);
+        self.context = Some(Context::Author(ctx));
         self
     }
-    
+
     pub fn with_remote_context(mut self, ctx: RemoteInfo) -> Self {
-        self.remote_context = Some(ctx);
+        self.context = Some(Context::Remote(ctx));
         self
     }
-    
+
     pub fn with_http_response_context(mut self, ctx: HttpResponseContext) -> Self {
-        self.http_response_context = Some(ctx);
+        self.context = Some(Context::HttpResponse(ctx));
         self
     }
-    
+
     pub fn with_http_context(mut self, ctx: HttpContext) -> Self {
-        self.http_context = Some(ctx);
+        self.context = Some(Context::Http(ctx));
         self
     }
-    
+
     pub fn with_stats_context(mut self, ctx: DiffStats) -> Self {
-        self.stats_context = Some(ctx);
+        self.context = Some(Context::Stats(ctx));
         self
     }
-    
+
     pub fn with_string_context(mut self, ctx: StringContext) -> Self {
-        self.string_context = Some(ctx);
+        self.context = Some(Context::String(ctx));
         self
     }
-    
+
     pub fn with_number_context(mut self, ctx: NumberContext) -> Self {
-        self.number_context = Some(ctx);
+        self.context = Some(Context::Number(ctx));
         self
     }
-    
+
     pub fn with_array_context(mut self, ctx: ArrayContext) -> Self {
-        self.array_context = Some(ctx);
+        self.context = Some(Context::Array(ctx));
         self
     }
-    
+
+    /// Looks up a dynamic property by name.
     #[inline]
     pub fn get(&self, key: &str) -> Option<&Value> {
         self.properties.get(key)
     }
-    
+
+    /// Sets (or overwrites) a dynamic property.
     #[inline]
     pub fn set(&mut self, key: impl Into<String>, value: Value) {
         self.properties.insert(key.into(), value);
@@ -148,9 +186,10 @@ impl Object {
 }
 
 impl Value {
+    /// Creates an `env` object populated with common environment variables.
     pub fn env_object() -> Self {
         let mut obj = Object::new("env");
-        
+
         if let Ok(val) = std::env::var("USER") {
             obj.set("USER", Value::String(val));
         }
@@ -166,40 +205,50 @@ impl Value {
         if let Ok(val) = std::env::var("SHELL") {
             obj.set("SHELL", Value::String(val));
         }
-        
+
         Value::Object(obj)
     }
-    
+
+    /// Returns `true` if this value is a string.
     #[inline]
     pub fn is_string(&self) -> bool {
         matches!(self, Value::String(_))
     }
-    
+
+    /// Returns `true` if this value is a number.
     #[inline]
     pub fn is_number(&self) -> bool {
         matches!(self, Value::Number(_))
     }
-    
+
+    /// Returns `true` if this value is a boolean.
     #[inline]
     pub fn is_bool(&self) -> bool {
         matches!(self, Value::Bool(_))
     }
-    
+
+    /// Returns `true` if this value is null.
     #[inline]
     pub fn is_null(&self) -> bool {
         matches!(self, Value::Null)
     }
-    
+
+    /// Returns `true` if this value is an array.
     #[inline]
     pub fn is_array(&self) -> bool {
         matches!(self, Value::Array(_))
     }
-    
+
+    /// Returns `true` if this value is an object.
     #[inline]
     pub fn is_object(&self) -> bool {
         matches!(self, Value::Object(_))
     }
-    
+
+    /// Returns `true` if this value is considered "truthy".
+    ///
+    /// Truthiness rules: `false`, `null`, empty strings, zero, and empty
+    /// arrays are falsy. Everything else is truthy.
     #[inline]
     pub fn is_truthy(&self) -> bool {
         match self {
@@ -211,7 +260,8 @@ impl Value {
             Value::Object(_) => true,
         }
     }
-    
+
+    /// Converts this value to a `String`, coercing numbers and bools.
     pub fn as_string(&self) -> Result<String> {
         match self {
             Value::String(s) => Ok(s.clone()),
@@ -221,130 +271,121 @@ impl Value {
             _ => bail!("Cannot convert {:?} to string", self),
         }
     }
-    
+
+    /// Converts this value to an `f64`. Strings are parsed.
     pub fn as_number(&self) -> Result<f64> {
         match self {
             Value::Number(n) => Ok(*n),
-            Value::String(s) => s.parse().map_err(|_| anyhow::anyhow!("Cannot parse '{}' as number", s)),
+            Value::String(s) => s
+                .parse()
+                .map_err(|_| anyhow::anyhow!("Cannot parse '{}' as number", s)),
             _ => bail!("Cannot convert {:?} to number", self),
         }
     }
-    
+
+    /// Converts this value to a `bool` using truthiness rules.
     pub fn as_bool(&self) -> Result<bool> {
         match self {
             Value::Bool(b) => Ok(*b),
             _ => Ok(self.is_truthy()),
         }
     }
-    
+
+    /// Resolves a property access (`value.name`) by delegating to the
+    /// appropriate typed context or falling back to dynamic properties.
     pub fn get_property(&self, name: &str) -> Result<Value> {
         match self {
             Value::Object(obj) => {
-                if obj.type_name == "File"
-                    && let Some(ctx) = &obj.file_context
-                        && let Ok(value) = ctx.call_property(name) {
-                            return Ok(value);
+                if let Some(ctx) = &obj.context {
+                    match ctx {
+                        Context::File(c) => {
+                            if let Ok(v) = c.call_property(name) {
+                                return Ok(v);
+                            }
                         }
-                if obj.type_name == "Path"
-                    && let Some(ctx) = &obj.path_context
-                        && let Ok(value) = ctx.call_property(name) {
-                            return Ok(value);
+                        Context::Path(c) => {
+                            if let Ok(v) = c.call_property(name) {
+                                return Ok(v);
+                            }
                         }
-                if obj.type_name == "Git"
-                    && let Some(ctx) = &obj.git_context
-                        && let Ok(value) = ctx.call_property(name) {
-                            return Ok(value);
+                        Context::Git(c) => {
+                            if let Ok(v) = c.call_property(name) {
+                                return Ok(v);
+                            }
                         }
-                if obj.type_name == "FilesCollection"
-                    && let Some(ctx) = &obj.files_context {
-                        match name {
-                            "staged" => {
-                                let files: Vec<Value> = ctx.staged().iter()
-                                    .map(|path| Value::file_object(path.clone()))
-                                    .collect();
-                                return Ok(Value::Array(files));
+                        Context::FilesCollection(c) => {
+                            let accessor = |items: &[String]| -> Value {
+                                Value::Array(
+                                    items
+                                        .iter()
+                                        .map(|p| Value::file_object(p.clone()))
+                                        .collect(),
+                                )
+                            };
+                            match name {
+                                "staged" => return Ok(accessor(&c.staged)),
+                                "all" => return Ok(accessor(&c.all)),
+                                "modified" => return Ok(accessor(&c.modified)),
+                                "added" => return Ok(accessor(&c.added)),
+                                "deleted" => return Ok(accessor(&c.deleted)),
+                                "unstaged" => return Ok(accessor(&c.unstaged)),
+                                _ => {}
                             }
-                            "all" => {
-                                let files: Vec<Value> = ctx.all().iter()
-                                    .map(|path| Value::file_object(path.clone()))
-                                    .collect();
-                                return Ok(Value::Array(files));
-                            }
-                            "modified" => {
-                                let files: Vec<Value> = ctx.modified().iter()
-                                    .map(|path| Value::file_object(path.clone()))
-                                    .collect();
-                                return Ok(Value::Array(files));
-                            }
-                            "added" => {
-                                let files: Vec<Value> = ctx.added().iter()
-                                    .map(|path| Value::file_object(path.clone()))
-                                    .collect();
-                                return Ok(Value::Array(files));
-                            }
-                            "deleted" => {
-                                let files: Vec<Value> = ctx.deleted().iter()
-                                    .map(|path| Value::file_object(path.clone()))
-                                    .collect();
-                                return Ok(Value::Array(files));
-                            }
-                            "unstaged" => {
-                                let files: Vec<Value> = ctx.unstaged().iter()
-                                    .map(|path| Value::file_object(path.clone()))
-                                    .collect();
-                                return Ok(Value::Array(files));
-                            }
-                            _ => {}
                         }
+                        Context::Branch(c) => {
+                            if let Ok(v) = c.call_property(name) {
+                                return Ok(v);
+                            }
+                        }
+                        Context::Commit(c) => {
+                            if let Ok(v) = c.call_property(name) {
+                                return Ok(v);
+                            }
+                        }
+                        Context::Author(c) => {
+                            if let Ok(v) = c.call_property(name) {
+                                return Ok(v);
+                            }
+                        }
+                        Context::Remote(c) => {
+                            if let Ok(v) = c.call_property(name) {
+                                return Ok(v);
+                            }
+                        }
+                        Context::Stats(c) => {
+                            if let Ok(v) = c.call_property(name) {
+                                return Ok(v);
+                            }
+                        }
+                        Context::String(c) => {
+                            if let Ok(v) = c.call_property(name) {
+                                return Ok(v);
+                            }
+                        }
+                        Context::Number(c) => {
+                            if let Ok(v) = c.call_property(name) {
+                                return Ok(v);
+                            }
+                        }
+                        Context::Array(c) => {
+                            if let Ok(v) = c.call_property(name) {
+                                return Ok(v);
+                            }
+                        }
+                        Context::HttpResponse(c) => {
+                            if name == "json" {
+                                return Ok(c.json_parsed());
+                            }
+                            if let Ok(v) = c.call_property(name) {
+                                return Ok(v);
+                            }
+                        }
+                        Context::Http(_) => {}
                     }
-                if obj.type_name == "Branch"
-                    && let Some(ctx) = &obj.branch_context
-                        && let Ok(value) = ctx.call_property(name) {
-                            return Ok(value);
-                        }
-                if obj.type_name == "Commit"
-                    && let Some(ctx) = &obj.commit_context
-                        && let Ok(value) = ctx.call_property(name) {
-                            return Ok(value);
-                        }
-                if obj.type_name == "Author"
-                    && let Some(ctx) = &obj.author_context
-                        && let Ok(value) = ctx.call_property(name) {
-                            return Ok(value);
-                        }
-                if obj.type_name == "Remote"
-                    && let Some(ctx) = &obj.remote_context
-                        && let Ok(value) = ctx.call_property(name) {
-                            return Ok(value);
-                        }
-                if obj.type_name == "Stats"
-                    && let Some(ctx) = &obj.stats_context
-                        && let Ok(value) = ctx.call_property(name) {
-                            return Ok(value);
-                        }
-                if obj.type_name == "String"
-                    && let Some(ctx) = &obj.string_context
-                        && let Ok(value) = ctx.call_property(name) {
-                            return Ok(value);
-                        }
-                if obj.type_name == "Number"
-                    && let Some(ctx) = &obj.number_context
-                        && let Ok(value) = ctx.call_property(name) {
-                            return Ok(value);
-                        }
-                if obj.type_name == "Array"
-                    && let Some(ctx) = &obj.array_context
-                        && let Ok(value) = ctx.call_property(name) {
-                            return Ok(value);
-                        }
-                if obj.type_name == "HttpResponse"
-                    && let Some(ctx) = &obj.http_response_context
-                        && let Ok(value) = ctx.call_property(name) {
-                            return Ok(value);
-                        }
-                obj.get(name)
-                    .cloned()
-                    .ok_or_else(|| anyhow::anyhow!("Property '{}' not found on {}", name, obj.type_name))
+                }
+                obj.get(name).cloned().ok_or_else(|| {
+                    anyhow::anyhow!("Property '{}' not found on {}", name, obj.type_name)
+                })
             }
             Value::String(s) => {
                 let ctx = StringContext::new(s.clone());
@@ -362,22 +403,25 @@ impl Value {
         }
     }
 
+    /// Calls a method on this value (e.g. `string.contains("x")`).
+    ///
+    /// Delegates to the appropriate typed context.
     #[allow(dead_code)]
     pub fn call_method(&self, name: &str, args: &[Value]) -> Result<Value> {
         match self {
             Value::String(s) => {
                 let ctx = StringContext::new(s.clone());
-                let string_args: Result<Vec<&str>> = args.iter().map(|v| {
-                    v.as_string().map(|s| Box::leak(s.into_boxed_str()) as &str)
-                }).collect();
-                ctx.call_method(name, &string_args?)
+                let owned_args: Result<Vec<String>> = args.iter().map(|v| v.as_string()).collect();
+                let owned_args = owned_args?;
+                let str_refs: Vec<&str> = owned_args.iter().map(|s| s.as_str()).collect();
+                ctx.call_method(name, &str_refs)
             }
             Value::Number(n) => {
                 let ctx = NumberContext::new(*n);
-                let string_args: Result<Vec<&str>> = args.iter().map(|v| {
-                    v.as_string().map(|s| Box::leak(s.into_boxed_str()) as &str)
-                }).collect();
-                ctx.call_method(name, &string_args?)
+                let owned_args: Result<Vec<String>> = args.iter().map(|v| v.as_string()).collect();
+                let owned_args = owned_args?;
+                let str_refs: Vec<&str> = owned_args.iter().map(|s| s.as_str()).collect();
+                ctx.call_method(name, &str_refs)
             }
             Value::Array(arr) => {
                 // Special handling for first() and last() to return the actual Value
@@ -387,66 +431,46 @@ impl Value {
                 if name == "last" && args.is_empty() {
                     return Ok(arr.last().cloned().unwrap_or(Value::Null));
                 }
-                
+
                 let ctx = ArrayContext::new(arr.clone());
-                let string_args: Result<Vec<&str>> = args.iter().map(|v| {
-                    v.as_string().map(|s| Box::leak(s.into_boxed_str()) as &str)
-                }).collect();
-                ctx.call_method(name, &string_args?)
+                let owned_args: Result<Vec<String>> = args.iter().map(|v| v.as_string()).collect();
+                let owned_args = owned_args?;
+                let str_refs: Vec<&str> = owned_args.iter().map(|s| s.as_str()).collect();
+                ctx.call_method(name, &str_refs)
             }
             Value::Object(obj) => self.call_object_method(obj, name, args),
             _ => bail!("Cannot call method '{}' on {:?}", name, self),
         }
     }
-    
+
     fn call_object_method(&self, obj: &Object, name: &str, args: &[Value]) -> Result<Value> {
-        if obj.type_name == "File" {
-            if let Some(ctx) = &obj.file_context {
-                let string_args: Result<Vec<String>> = args.iter()
-                    .map(|v| v.as_string())
-                    .collect();
-                let string_args = string_args?;
-                let str_refs: Vec<&str> = string_args.iter().map(|s| s.as_str()).collect();
-                ctx.call_method(name, &str_refs)
-            } else {
-                bail!("File object has no context")
+        match &obj.context {
+            Some(Context::File(ctx)) => {
+                let owned: Vec<String> =
+                    args.iter().map(|v| v.as_string()).collect::<Result<_>>()?;
+                let refs: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
+                ctx.call_method(name, &refs)
             }
-        } 
-        else if obj.type_name == "Path" {
-            if let Some(ctx) = &obj.path_context {
-                let string_args: Result<Vec<String>> = args.iter()
-                    .map(|v| v.as_string())
-                    .collect();
-                let string_args = string_args?;
-                let str_refs: Vec<&str> = string_args.iter().map(|s| s.as_str()).collect();
-                ctx.call_method(name, &str_refs)
-            } else {
-                bail!("Path object has no context")
+            Some(Context::Path(ctx)) => {
+                let owned: Vec<String> =
+                    args.iter().map(|v| v.as_string()).collect::<Result<_>>()?;
+                let refs: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
+                ctx.call_method(name, &refs)
             }
-        }
-        else if obj.type_name == "HttpResponse" {
-            if let Some(ctx) = &obj.http_response_context {
+            Some(Context::HttpResponse(ctx)) => {
                 if name == "json" && args.is_empty() {
                     return Ok(ctx.json_parsed());
                 }
-                
-                let string_args: Result<Vec<String>> = args.iter()
-                    .map(|v| v.as_string())
-                    .collect();
-                let string_args = string_args?;
-                let str_refs: Vec<&str> = string_args.iter().map(|s| s.as_str()).collect();
-                ctx.call_method(name, &str_refs)
-            } else {
-                bail!("HttpResponse object has no context")
+                let owned: Vec<String> =
+                    args.iter().map(|v| v.as_string()).collect::<Result<_>>()?;
+                let refs: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
+                ctx.call_method(name, &refs)
             }
-        }
-        else if obj.type_name == "Http" {
-            if obj.http_context.is_some() {
+            Some(Context::Http(_)) => {
                 if args.len() != 1 {
                     bail!("http.{}() takes exactly 1 argument (url)", name);
                 }
                 let url = args[0].as_string()?;
-                
                 match name {
                     "get" => crate::builtins::builtin_http_get(&[Value::String(url)]),
                     "post" => crate::builtins::builtin_http_post(&[Value::String(url)]),
@@ -454,15 +478,13 @@ impl Value {
                     "delete" => crate::builtins::builtin_http_delete(&[Value::String(url)]),
                     _ => bail!("Method 'http.{}' not found", name),
                 }
-            } else {
-                bail!("Http object has no context")
             }
-        } 
-        else {
-            bail!("Method '{}' not found on {}", name, obj.type_name)
+            _ => bail!("Method '{}' not found on {}", name, obj.type_name),
         }
     }
-    
+
+    /// Returns a human-readable string representation of this value
+    /// (used by the `print` statement).
     pub fn display(&self) -> String {
         match self {
             Value::String(s) => s.clone(),
@@ -477,10 +499,10 @@ impl Value {
             Value::Null => "null".to_string(),
             Value::Array(arr) => {
                 let items: Vec<String> = arr.iter().map(|v| v.display()).collect();
-                format!("[{}]", items.join(", "))
+                items.join(", ")
             }
             Value::Object(obj) => {
-                if let Some(path_ctx) = &obj.path_context {
+                if let Some(Context::Path(path_ctx)) = &obj.context {
                     return path_ctx.to_string();
                 }
                 format!("{}{{ {} properties }}", obj.type_name, obj.properties.len())
@@ -490,6 +512,7 @@ impl Value {
 }
 
 impl Value {
+    /// Tests equality between two values (the `==` operator).
     pub fn equals(&self, other: &Value) -> Result<bool> {
         match (self, other) {
             (Value::String(a), Value::String(b)) => Ok(a == b),
@@ -499,29 +522,34 @@ impl Value {
             _ => Ok(false),
         }
     }
-    
+
+    /// Tests inequality (`!=`).
     pub fn not_equals(&self, other: &Value) -> Result<bool> {
         Ok(!self.equals(other)?)
     }
-    
+
+    /// Numeric less-than comparison (`<`).
     pub fn less_than(&self, other: &Value) -> Result<bool> {
         let a = self.as_number()?;
         let b = other.as_number()?;
         Ok(a < b)
     }
-    
+
+    /// Numeric less-or-equal comparison (`<=`).
     pub fn less_or_equal(&self, other: &Value) -> Result<bool> {
         let a = self.as_number()?;
         let b = other.as_number()?;
         Ok(a <= b)
     }
-    
+
+    /// Numeric greater-than comparison (`>`).
     pub fn greater_than(&self, other: &Value) -> Result<bool> {
         let a = self.as_number()?;
         let b = other.as_number()?;
         Ok(a > b)
     }
-    
+
+    /// Numeric greater-or-equal comparison (`>=`).
     pub fn greater_or_equal(&self, other: &Value) -> Result<bool> {
         let a = self.as_number()?;
         let b = other.as_number()?;
@@ -530,43 +558,39 @@ impl Value {
 }
 
 impl Value {
+    /// Creates a `File` object from a filesystem path.
     pub fn file_object(path: String) -> Value {
         let file_ctx = FileContext::from_path(&path);
-        
-        let path_obj = Value::Object(
-            Object::new("Path")
-                .with_path_context(file_ctx.path.clone())
-        );
-        
+
+        let path_obj = Value::Object(Object::new("Path").with_path_context(file_ctx.path.clone()));
+
         Value::Object(
             Object::new("File")
                 .with_property("path", path_obj)
-                .with_file_context(file_ctx)
+                .with_file_context(file_ctx),
         )
     }
-    
+
+    /// Creates a `Path` object from a filesystem path.
     pub fn path_object(path: String) -> Value {
         let path_ctx = PathContext::from_path(&path);
-        Value::Object(
-            Object::new("Path")
-                .with_path_context(path_ctx)
-        )
+        Value::Object(Object::new("Path").with_path_context(path_ctx))
     }
-    
-    pub fn http_response_object(status: u16, body: String, headers: std::collections::HashMap<String, String>) -> Value {
+
+    /// Creates an `HttpResponse` object from a status code, body, and headers.
+    pub fn http_response_object(
+        status: u16,
+        body: String,
+        headers: std::collections::HashMap<String, String>,
+    ) -> Value {
         let response_ctx = crate::contexts::HttpResponseContext::new(status, body, headers);
-        Value::Object(
-            Object::new("HttpResponse")
-                .with_http_response_context(response_ctx)
-        )
+        Value::Object(Object::new("HttpResponse").with_http_response_context(response_ctx))
     }
-    
+
+    /// Creates the root `http` object for HTTP operations.
     pub fn http_object() -> Value {
         let http_ctx = crate::contexts::HttpContext::new();
-        Value::Object(
-            Object::new("Http")
-                .with_http_context(http_ctx)
-        )
+        Value::Object(Object::new("Http").with_http_context(http_ctx))
     }
 }
 
@@ -606,7 +630,7 @@ mod tests {
         let null_val = Value::Null;
         let array_val = Value::Array(vec![Value::Number(1.0)]);
         let object_val = Value::Object(Object::new("Test"));
-        
+
         assert!(string_val.is_string());
         assert!(number_val.is_number());
         assert!(bool_val.is_bool());
@@ -630,7 +654,10 @@ mod tests {
 
     #[test]
     fn test_as_string() {
-        assert_eq!(Value::String("test".to_string()).as_string().unwrap(), "test");
+        assert_eq!(
+            Value::String("test".to_string()).as_string().unwrap(),
+            "test"
+        );
         assert_eq!(Value::Number(42.0).as_string().unwrap(), "42");
         assert_eq!(Value::Bool(true).as_string().unwrap(), "true");
         assert_eq!(Value::Null.as_string().unwrap(), "null");
@@ -638,32 +665,36 @@ mod tests {
 
     #[test]
     fn test_as_number() {
-        assert_eq!(Value::Number(3.14).as_number().unwrap(), 3.14);
+        assert_eq!(Value::Number(3.15).as_number().unwrap(), 3.15);
         assert_eq!(Value::String("42".to_string()).as_number().unwrap(), 42.0);
-        assert!(Value::String("not a number".to_string()).as_number().is_err());
+        assert!(
+            Value::String("not a number".to_string())
+                .as_number()
+                .is_err()
+        );
     }
 
     #[test]
     fn test_as_bool() {
-        assert_eq!(Value::Bool(true).as_bool().unwrap(), true);
-        assert_eq!(Value::Bool(false).as_bool().unwrap(), false);
-        assert_eq!(Value::Number(1.0).as_bool().unwrap(), true);
-        assert_eq!(Value::Number(0.0).as_bool().unwrap(), false);
-        assert_eq!(Value::String("hi".to_string()).as_bool().unwrap(), true);
-        assert_eq!(Value::String("".to_string()).as_bool().unwrap(), false);
+        assert!(Value::Bool(true).as_bool().unwrap());
+        assert!(!Value::Bool(false).as_bool().unwrap());
+        assert!(Value::Number(1.0).as_bool().unwrap());
+        assert!(!Value::Number(0.0).as_bool().unwrap());
+        assert!(Value::String("hi".to_string()).as_bool().unwrap());
+        assert!(!Value::String("".to_string()).as_bool().unwrap());
     }
 
     #[test]
     fn test_from_conversions() {
         let bool_val: Value = true.into();
         assert!(matches!(bool_val, Value::Bool(true)));
-        
+
         let string_val: Value = "hello".to_string().into();
         assert!(matches!(string_val, Value::String(_)));
-        
+
         let number_val: Value = 42.0.into();
         assert!(matches!(number_val, Value::Number(42.0)));
-        
+
         let array_val: Value = vec!["a".to_string(), "b".to_string()].into();
         assert!(matches!(array_val, Value::Array(_)));
     }
@@ -680,17 +711,20 @@ mod tests {
         let obj = Object::new("Test")
             .with_property("name", Value::String("John".to_string()))
             .with_property("age", Value::Number(30.0));
-        
+
         assert_eq!(obj.properties.len(), 2);
         assert!(matches!(obj.properties.get("name"), Some(Value::String(_))));
-        assert!(matches!(obj.properties.get("age"), Some(Value::Number(30.0))));
+        assert!(matches!(
+            obj.properties.get("age"),
+            Some(Value::Number(30.0))
+        ));
     }
 
     #[test]
     fn test_object_get_property() {
         let mut obj = Object::new("Test");
         obj.set("name", Value::String("Alice".to_string()));
-        
+
         assert!(obj.get("name").is_some());
         if let Some(Value::String(s)) = obj.get("name") {
             assert_eq!(s, "Alice");
@@ -705,10 +739,10 @@ mod tests {
             Value::Number(2.0),
             Value::Number(3.0),
         ]);
-        
+
         assert!(arr.is_array());
         assert!(arr.is_truthy());
-        
+
         if let Value::Array(items) = arr {
             assert_eq!(items.len(), 3);
             assert!(matches!(items[0], Value::Number(1.0)));
@@ -722,7 +756,7 @@ mod tests {
         let val1 = Value::String("test".to_string());
         let val2 = Value::String("test".to_string());
         let val3 = Value::String("other".to_string());
-        
+
         assert_eq!(val1.as_string().unwrap(), val2.as_string().unwrap());
         assert_ne!(val1.as_string().unwrap(), val3.as_string().unwrap());
     }

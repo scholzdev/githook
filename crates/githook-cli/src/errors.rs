@@ -1,4 +1,5 @@
 use colored::*;
+use githook_eval::EvalError;
 use githook_syntax::error::Span;
 use std::fmt;
 
@@ -155,6 +156,12 @@ pub fn enhance_error(
     let message = err.to_string();
 
     let mut enhanced = EnhancedError::new(message.clone());
+
+    if let Some(eval_err) = err.downcast_ref::<EvalError>()
+        && let Some(span) = eval_err.span
+    {
+        enhanced = enhanced.with_span(span);
+    }
 
     if let Some(file) = file {
         enhanced = enhanced.with_file(file);

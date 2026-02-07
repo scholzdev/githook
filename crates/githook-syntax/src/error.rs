@@ -1,5 +1,6 @@
 use std::fmt;
 
+/// Formats a compile error with source context (surrounding lines and caret).
 pub fn format_error_with_source(error_msg: &str, source: &str, span: Span) -> String {
     let lines: Vec<&str> = source.lines().collect();
 
@@ -37,15 +38,24 @@ pub fn format_error_with_source(error_msg: &str, source: &str, span: Span) -> St
     output
 }
 
+/// A source-code location span.
+///
+/// Tracks the line, column, and byte offsets of a token or AST node
+/// within the original `.ghook` source text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Span {
+    /// 1-based line number.
     pub line: usize,
+    /// 1-based column number.
     pub col: usize,
+    /// Byte offset of the start of the span.
     pub start: usize,
+    /// Byte offset of the end of the span (exclusive).
     pub end: usize,
 }
 
 impl Span {
+    /// Creates a new span from explicit line, column, start, and end values.
     pub fn new(line: usize, col: usize, start: usize, end: usize) -> Self {
         Self {
             line,
@@ -55,6 +65,7 @@ impl Span {
         }
     }
 
+    /// Creates a single-character span at the given position.
     pub fn single(line: usize, col: usize, offset: usize) -> Self {
         Self {
             line,
@@ -64,6 +75,7 @@ impl Span {
         }
     }
 
+    /// Merges two spans into one that covers both ranges.
     pub fn merge(&self, other: &Span) -> Self {
         Self {
             line: self.line.min(other.line),
@@ -78,6 +90,7 @@ impl Span {
     }
 }
 
+/// An error produced during lexical analysis (tokenization).
 #[derive(Debug, Clone)]
 pub enum LexError {
     UnexpectedChar {
@@ -106,6 +119,7 @@ pub enum LexError {
 }
 
 impl LexError {
+    /// Returns the source [`Span`] where the error occurred.
     pub fn span(&self) -> Span {
         match self {
             LexError::UnexpectedChar { span, .. } => *span,
@@ -149,6 +163,7 @@ impl fmt::Display for LexError {
 
 impl std::error::Error for LexError {}
 
+/// An error produced during parsing.
 #[derive(Debug, Clone)]
 pub enum ParseError {
     UnexpectedToken {
@@ -172,6 +187,7 @@ pub enum ParseError {
 }
 
 impl ParseError {
+    /// Returns the source [`Span`] where the error occurred, if available.
     pub fn span(&self) -> Option<Span> {
         match self {
             ParseError::UnexpectedToken { span, .. } => Some(*span),
@@ -221,17 +237,21 @@ impl From<LexError> for ParseError {
     }
 }
 
+/// A rich, formatted diagnostic that combines a lex or parse error with
+/// source text for pretty-printing.
 pub struct Diagnostic<'a> {
     source: &'a str,
     error: DiagnosticError,
 }
 
+/// The inner error variant wrapped by [`Diagnostic`].
 pub enum DiagnosticError {
     Lex(LexError),
     Parse(ParseError),
 }
 
 impl<'a> Diagnostic<'a> {
+    /// Creates a diagnostic from a lexer error.
     pub fn new_lex(source: &'a str, error: LexError) -> Self {
         Self {
             source,
@@ -239,6 +259,7 @@ impl<'a> Diagnostic<'a> {
         }
     }
 
+    /// Creates a diagnostic from a parser error.
     pub fn new_parse(source: &'a str, error: ParseError) -> Self {
         Self {
             source,
@@ -267,6 +288,8 @@ impl<'a> Diagnostic<'a> {
         }
     }
 
+    /// Renders the diagnostic as a human-readable error string with ANSI colors,
+    /// source context, and caret indicators.
     pub fn format_error(&self) -> String {
         let mut output = String::new();
 

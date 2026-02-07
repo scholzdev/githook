@@ -32,9 +32,14 @@ static KEYWORDS: Lazy<HashMap<&'static str, Token>> = Lazy::new(|| {
     m.insert("true", Token::True);
     m.insert("false", Token::False);
     m.insert("null", Token::Null);
+    m.insert("then", Token::Then);
     m
 });
 
+/// A token produced by the Githook lexer.
+///
+/// Includes all keywords, operators, punctuation, literals, and whitespace
+/// tokens that the parser consumes.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
     Run,
@@ -47,6 +52,7 @@ pub enum Token {
     Foreach,
     If,
     Else,
+    Then,
     Match,
     Matching,
     Try,
@@ -97,6 +103,7 @@ pub enum Token {
 }
 
 impl Token {
+    /// Returns a human-readable description of this token for error messages.
     pub fn display_name(&self) -> String {
         match self {
             Token::Run => "keyword 'run'".to_string(),
@@ -109,6 +116,7 @@ impl Token {
             Token::Foreach => "keyword 'foreach'".to_string(),
             Token::If => "keyword 'if'".to_string(),
             Token::Else => "keyword 'else'".to_string(),
+            Token::Then => "keyword 'then'".to_string(),
             Token::Match => "keyword 'match'".to_string(),
             Token::Matching => "keyword 'matching'".to_string(),
             Token::Try => "keyword 'try'".to_string(),
@@ -160,12 +168,19 @@ impl Token {
     }
 }
 
+/// A [`Token`] paired with its source location [`Span`].
 #[derive(Debug, Clone)]
 pub struct SpannedToken {
+    /// The token value.
     pub token: Token,
+    /// The source span.
     pub span: Span,
 }
 
+/// Tokenizes Githook source code into a sequence of [`SpannedToken`]s.
+///
+/// Returns `Err(`[`LexError`]`)` on the first invalid character or
+/// unterminated string.
 pub fn tokenize(input: &str) -> Result<Vec<SpannedToken>, LexError> {
     let mut tokens = Vec::with_capacity(input.len() / 4);
     let mut chars = input.chars().peekable();
@@ -616,6 +631,7 @@ impl fmt::Display for Token {
             Token::Foreach => write!(f, "foreach"),
             Token::If => write!(f, "if"),
             Token::Else => write!(f, "else"),
+            Token::Then => write!(f, "then"),
             Token::Match => write!(f, "match"),
             Token::Matching => write!(f, "matching"),
             Token::Try => write!(f, "try"),
@@ -675,7 +691,7 @@ mod tests {
     fn test_tokenize_keywords() {
         let input = "run print block warn if else group macro";
         let tokens = tokenize(input).unwrap();
-        
+
         assert_eq!(tokens[0].token, Token::Run);
         assert_eq!(tokens[1].token, Token::Print);
         assert_eq!(tokens[2].token, Token::Block);
@@ -690,7 +706,7 @@ mod tests {
     fn test_tokenize_operators() {
         let input = "== != < <= > >= + - * / %";
         let tokens = tokenize(input).unwrap();
-        
+
         assert_eq!(tokens[0].token, Token::Eq);
         assert_eq!(tokens[1].token, Token::Ne);
         assert_eq!(tokens[2].token, Token::Lt);
@@ -708,7 +724,7 @@ mod tests {
     fn test_tokenize_brackets() {
         let input = "{ } [ ] ( )";
         let tokens = tokenize(input).unwrap();
-        
+
         assert_eq!(tokens[0].token, Token::LeftBrace);
         assert_eq!(tokens[1].token, Token::RightBrace);
         assert_eq!(tokens[2].token, Token::LeftBracket);
@@ -721,7 +737,7 @@ mod tests {
     fn test_tokenize_string() {
         let input = r#""hello world""#;
         let tokens = tokenize(input).unwrap();
-        
+
         assert_eq!(tokens[0].token, Token::String("hello world".to_string()));
     }
 
@@ -729,17 +745,20 @@ mod tests {
     fn test_tokenize_string_escaped() {
         let input = r#""hello \"quoted\" world""#;
         let tokens = tokenize(input).unwrap();
-        
-        assert_eq!(tokens[0].token, Token::String("hello \"quoted\" world".to_string()));
+
+        assert_eq!(
+            tokens[0].token,
+            Token::String("hello \"quoted\" world".to_string())
+        );
     }
 
     #[test]
     fn test_tokenize_number() {
-        let input = "42 3.14 0.5";
+        let input = "42 3.15 0.5";
         let tokens = tokenize(input).unwrap();
-        
+
         assert_eq!(tokens[0].token, Token::Number(42.0));
-        assert_eq!(tokens[1].token, Token::Number(3.14));
+        assert_eq!(tokens[1].token, Token::Number(3.15));
         assert_eq!(tokens[2].token, Token::Number(0.5));
     }
 
@@ -747,7 +766,7 @@ mod tests {
     fn test_tokenize_identifier() {
         let input = "myVar userName file_path";
         let tokens = tokenize(input).unwrap();
-        
+
         assert_eq!(tokens[0].token, Token::Identifier("myVar".to_string()));
         assert_eq!(tokens[1].token, Token::Identifier("userName".to_string()));
         assert_eq!(tokens[2].token, Token::Identifier("file_path".to_string()));
@@ -757,7 +776,7 @@ mod tests {
     fn test_tokenize_comment() {
         let input = "# this is a comment\nprint \"hello\"";
         let tokens = tokenize(input).unwrap();
-        
+
         assert!(matches!(tokens[0].token, Token::Comment(_)));
         assert_eq!(tokens[1].token, Token::Newline);
         assert_eq!(tokens[2].token, Token::Print);
@@ -767,7 +786,7 @@ mod tests {
     fn test_tokenize_multiline() {
         let input = "print \"hello\"\nprint \"world\"";
         let tokens = tokenize(input).unwrap();
-        
+
         assert_eq!(tokens[0].token, Token::Print);
         assert_eq!(tokens[2].token, Token::Newline);
         assert_eq!(tokens[3].token, Token::Print);
@@ -777,7 +796,7 @@ mod tests {
     fn test_tokenize_dot_access() {
         let input = "git.files.staged";
         let tokens = tokenize(input).unwrap();
-        
+
         assert_eq!(tokens[0].token, Token::Identifier("git".to_string()));
         assert_eq!(tokens[1].token, Token::Dot);
         assert_eq!(tokens[2].token, Token::Identifier("files".to_string()));
@@ -789,9 +808,9 @@ mod tests {
     fn test_error_unterminated_string() {
         let input = "\"hello\\";
         let result = tokenize(input);
-        
-        if result.is_err() {
-            assert!(matches!(result.unwrap_err(), LexError::UnterminatedString { .. }));
+
+        if let Err(e) = result {
+            assert!(matches!(e, LexError::UnterminatedString { .. }));
         }
     }
 
@@ -799,19 +818,22 @@ mod tests {
     fn test_error_invalid_character() {
         let input = "print ^";
         let result = tokenize(input);
-        
+
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), LexError::UnexpectedChar { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            LexError::UnexpectedChar { .. }
+        ));
     }
 
     #[test]
     fn test_span_tracking() {
         let input = "print \"hello\"";
         let tokens = tokenize(input).unwrap();
-        
+
         assert_eq!(tokens[0].span.line, 1);
         assert_eq!(tokens[0].span.col, 1);
-        
+
         assert_eq!(tokens[1].span.line, 1);
         assert_eq!(tokens[1].span.col, 7);
     }
@@ -820,7 +842,7 @@ mod tests {
     fn test_boolean_literals() {
         let input = "true false";
         let tokens = tokenize(input).unwrap();
-        
+
         assert_eq!(tokens[0].token, Token::True);
         assert_eq!(tokens[1].token, Token::False);
     }
@@ -829,7 +851,7 @@ mod tests {
     fn test_logical_operators() {
         let input = "and or not";
         let tokens = tokenize(input).unwrap();
-        
+
         assert_eq!(tokens[0].token, Token::And);
         assert_eq!(tokens[1].token, Token::Or);
         assert_eq!(tokens[2].token, Token::Not);
@@ -839,7 +861,7 @@ mod tests {
     fn test_arrow_operators() {
         let input = "-> =>";
         let tokens = tokenize(input).unwrap();
-        
+
         assert_eq!(tokens[0].token, Token::Arrow);
         assert_eq!(tokens[1].token, Token::FatArrow);
     }
@@ -848,7 +870,7 @@ mod tests {
     fn test_special_chars() {
         let input = "@ $ : ,";
         let tokens = tokenize(input).unwrap();
-        
+
         assert_eq!(tokens[0].token, Token::At);
         assert_eq!(tokens[1].token, Token::Dollar);
         assert_eq!(tokens[2].token, Token::Colon);

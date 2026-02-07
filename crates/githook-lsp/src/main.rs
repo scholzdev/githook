@@ -1,3 +1,12 @@
+//! # githook-lsp
+//!
+//! Language Server Protocol (LSP) implementation for the Githook
+//! scripting language.
+//!
+//! Provides completions, hover, go-to-definition, rename, references,
+//! semantic tokens, diagnostics, code lenses, folding ranges, document
+//! links, and inlay hints for `.ghook` files.
+
 use tower_lsp::{LspService, Server};
 use tracing::info;
 

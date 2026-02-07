@@ -225,6 +225,9 @@ fn get_keyword_documentation(keyword: &str) -> Option<&'static str> {
         "import" => Some(
             "**import** `\"path/to/file.ghook\"`\n\nImport from local file.\n\n**Example:**\n```githook\nimport \"./common.ghook\"\n```",
         ),
+        "then" => Some(
+            "**then**\n\nUsed in inline conditional expressions (ternary).\n\n**Example:**\n```githook\nlet label = if count > 0 then \"yes\" else \"no\"\nprint if active then \"on\" else \"off\"\n```",
+        ),
         _ => None,
     }
 }
@@ -320,7 +323,9 @@ fn format_macro_body(body: &[githook_syntax::Statement]) -> String {
     let mut result = String::new();
     for stmt in body {
         let line = match stmt {
-            githook_syntax::Statement::Run { command, .. } => format!("    run \"{}\"", command),
+            githook_syntax::Statement::Run { command, .. } => {
+                format!("    run {:?}", command)
+            }
             githook_syntax::Statement::Block { message, .. } => {
                 format!("    block \"{}\"", message)
             }

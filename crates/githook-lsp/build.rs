@@ -2,12 +2,25 @@ use std::collections::HashMap;
 use std::fs;
 
 fn main() {
-    println!("cargo:rerun-if-changed=../githook-eval/src/contexts.rs");
+    let context_files = [
+        "../githook-eval/src/contexts/mod.rs",
+        "../githook-eval/src/contexts/file.rs",
+        "../githook-eval/src/contexts/git.rs",
+        "../githook-eval/src/contexts/http.rs",
+        "../githook-eval/src/contexts/primitives.rs",
+    ];
+    for path in &context_files {
+        println!("cargo:rerun-if-changed={path}");
+    }
 
-    let content =
-        fs::read_to_string("../githook-eval/src/contexts.rs").expect("Failed to read contexts.rs");
+    let mut all_content = String::new();
+    for path in &context_files {
+        let content = fs::read_to_string(path).unwrap_or_else(|_| panic!("Failed to read {path}"));
+        all_content.push_str(&content);
+        all_content.push('\n');
+    }
 
-    let (properties, methods) = extract_docs(&content);
+    let (properties, methods) = extract_docs(&all_content);
 
     let db = serde_json::json!({
         "properties": properties,

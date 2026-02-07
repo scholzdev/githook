@@ -4,6 +4,11 @@ use smallvec::SmallVec;
 type MacroParams = SmallVec<[String; 4]>;
 type ParallelCommands = SmallVec<[String; 4]>;
 
+/// An expression node in the Githook AST.
+///
+/// Expressions evaluate to a [`crate::value::Value`] and include literals,
+/// identifiers, property access, method calls, binary/unary operations,
+/// arrays, closures, and interpolated strings.
 #[derive(Debug, Clone)]
 pub enum Expression {
     String(String, Span),
@@ -47,18 +52,37 @@ pub enum Expression {
         span: Span,
     },
 
+    /// Inline conditional: `if cond then expr else expr`.
+    IfExpr {
+        condition: Box<Expression>,
+        then_expr: Box<Expression>,
+        else_expr: Box<Expression>,
+        span: Span,
+    },
+
     InterpolatedString {
         parts: Vec<StringPart>,
         span: Span,
     },
+
+    /// Bracket/index access: `expr["key"]` or `expr[0]`.
+    IndexAccess {
+        receiver: Box<Expression>,
+        index: Box<Expression>,
+        span: Span,
+    },
 }
 
+/// A part of an interpolated string (`"hello ${name}"`).
 #[derive(Debug, Clone)]
 pub enum StringPart {
+    /// Raw text between interpolation boundaries.
     Literal(String),
+    /// An embedded `${...}` expression.
     Expression(Expression),
 }
 
+/// Binary operators supported in expressions.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BinaryOp {
     Eq,
@@ -76,16 +100,23 @@ pub enum BinaryOp {
     Mod,
 }
 
+/// Unary operators (`not`, `-`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum UnaryOp {
+    /// Logical negation (`not expr`).
     Not,
+    /// Arithmetic negation (`-expr`).
     Minus,
 }
 
+/// A top-level statement node in the Githook AST.
+///
+/// Each variant corresponds to one language construct (e.g. `run`, `let`,
+/// `foreach`, `if`, `group`, `macro`, etc.).
 #[derive(Debug, Clone)]
 pub enum Statement {
     Run {
-        command: String,
+        command: Expression,
         span: Span,
     },
 
@@ -146,6 +177,7 @@ pub enum Statement {
     BlockIf {
         condition: Expression,
         message: Option<String>,
+        /// Reserved for future use: optional prompt text for interactive mode.
         interactive: Option<String>,
         span: Span,
     },
@@ -153,6 +185,7 @@ pub enum Statement {
     WarnIf {
         condition: Expression,
         message: Option<String>,
+        /// Reserved for future use: optional prompt text for interactive mode.
         interactive: Option<String>,
         span: Span,
     },
@@ -205,36 +238,54 @@ pub enum Statement {
     },
 }
 
+/// The right-hand side of a `let` binding.
 #[derive(Debug, Clone)]
 pub enum LetValue {
+    /// A string literal value.
     String(String),
+    /// A numeric literal value.
     Number(f64),
+    /// An array literal of strings.
     Array(Vec<String>),
+    /// An arbitrary expression.
     Expression(Expression),
 }
 
+/// One arm of a `match` expression.
 #[derive(Debug, Clone)]
 pub struct MatchArm {
+    /// The pattern to match against.
     pub pattern: MatchPattern,
+    /// Statements to execute when the pattern matches.
     pub body: Vec<Statement>,
+    /// Source location.
     pub span: Span,
 }
 
+/// A pattern in a `match` arm.
 #[derive(Debug, Clone)]
 pub enum MatchPattern {
+    /// A glob/wildcard string pattern (e.g. `"feature/*"`).
     Wildcard(String, Span),
+    /// A literal expression pattern.
     Expression(Expression, Span),
+    /// The catch-all `_` pattern.
     Underscore(Span),
 }
 
+/// Severity level for a `group` block.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Severity {
+    /// Blocks the commit on failure (default).
     Critical,
+    /// Emits a warning but allows the commit.
     Warning,
+    /// Informational only.
     Info,
 }
 
 impl Expression {
+    /// Returns the source [`Span`] for this expression.
     pub fn span(&self) -> &Span {
         match self {
             Expression::String(_, s) => s,
@@ -248,10 +299,15 @@ impl Expression {
             Expression::Unary { span, .. } => span,
             Expression::Array(_, s) => s,
             Expression::Closure { span, .. } => span,
+            Expression::IfExpr { span, .. } => span,
             Expression::InterpolatedString { span, .. } => span,
+            Expression::IndexAccess { span, .. } => span,
         }
     }
 
+    /// Statically evaluates whether the expression is truthy, if possible.
+    ///
+    /// Returns `None` for expressions that cannot be evaluated at parse time.
     pub fn is_truthy(&self) -> Option<bool> {
         match self {
             Expression::Bool(b, _) => Some(*b),
@@ -264,6 +320,7 @@ impl Expression {
 }
 
 impl Statement {
+    /// Returns the source [`Span`] for this statement.
     pub fn span(&self) -> &Span {
         match self {
             Statement::Run { span, .. } => span,
