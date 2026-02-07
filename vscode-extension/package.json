@@ -6,7 +6,7 @@
   "publisher": "florianscholz",
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-username/githook"
+    "url": "https://github.com/florianscholz/githook"
   },
   "engines": {
     "vscode": "^1.75.0"
