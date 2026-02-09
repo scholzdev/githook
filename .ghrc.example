@@ -1,0 +1,35 @@
+# Example: Global Githook configuration
+# Save this as: ~/.ghrc
+#
+# This is your global configuration that applies to all Githook projects.
+# Project-local .ghrc files will override these values.
+
+# Timeouts (in seconds)
+command_timeout = 45
+http_timeout = 20
+
+# Parallelism (0 = all CPU cores)
+max_parallel_threads = 0
+
+# Package repository configuration
+# Where to download packages from (use statements)
+package_remote_url = "scholzdev/githooks-packages"
+package_remote_type = "github"  # or "gitlab"
+
+# Access token for private package repositories
+# For GitHub: Create a PAT with repo scope at https://github.com/settings/tokens
+# For GitLab: Create a token with read_repository scope
+# package_access_token = "ghp_your_github_token_here"
+# package_access_token = "glpat-your_gitlab_token_here"
+
+# Examples:
+# 
+# Private GitHub org:
+# package_remote_url = "myorg/hooks-private"
+# package_remote_type = "github"
+# package_access_token = "ghp_abc123..."
+#
+# Self-hosted GitLab:
+# package_remote_url = "gitlab.example.com/team/hooks"
+# package_remote_type = "gitlab"
+# package_access_token = "glpat-xyz789..."
