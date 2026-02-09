@@ -59,6 +59,7 @@ struct RawToken {
 
 fn collect_comments_raw(text: &str, tokens: &mut Vec<RawToken>) {
     for (line_idx, line) in text.lines().enumerate() {
+        // # style comments
         if let Some(pos) = line.find('#') {
             let comment_len = line.len() - pos;
             tokens.push(RawToken {
@@ -68,70 +69,19 @@ fn collect_comments_raw(text: &str, tokens: &mut Vec<RawToken>) {
                 token_type: 8,
                 modifiers: 0,
             });
+            continue;
         }
-    }
 
-    let mut in_comment = false;
-    let mut comment_start_line = 0;
-    let mut comment_start_col = 0;
-
-    for (line_idx, line) in text.lines().enumerate() {
-        let mut col = 0;
-        let chars: Vec<char> = line.chars().collect();
-
-        while col < chars.len() {
-            if !in_comment {
-                if col + 1 < chars.len() && chars[col] == '/' && chars[col + 1] == '*' {
-                    in_comment = true;
-                    comment_start_line = line_idx;
-                    comment_start_col = col;
-                }
-            } else if col + 1 < chars.len() && chars[col] == '*' && chars[col + 1] == '/' {
-                let end_col = col + 2;
-                if comment_start_line == line_idx {
-                    let length = end_col - comment_start_col;
-                    tokens.push(RawToken {
-                        line: line_idx as u32,
-                        start: comment_start_col as u32,
-                        length: length as u32,
-                        token_type: 8,
-                        modifiers: 0,
-                    });
-                } else {
-                    for l in comment_start_line..=line_idx {
-                        if l == comment_start_line {
-                            let line_text = text.lines().nth(l).unwrap_or("");
-                            let length = line_text.len() - comment_start_col;
-                            tokens.push(RawToken {
-                                line: l as u32,
-                                start: comment_start_col as u32,
-                                length: length as u32,
-                                token_type: 8,
-                                modifiers: 0,
-                            });
-                        } else if l == line_idx {
-                            tokens.push(RawToken {
-                                line: l as u32,
-                                start: 0,
-                                length: end_col as u32,
-                                token_type: 8,
-                                modifiers: 0,
-                            });
-                        } else {
-                            let line_len = text.lines().nth(l).map(|s| s.len()).unwrap_or(0);
-                            tokens.push(RawToken {
-                                line: l as u32,
-                                start: 0,
-                                length: line_len as u32,
-                                token_type: 8,
-                                modifiers: 0,
-                            });
-                        }
-                    }
-                }
-                in_comment = false;
-            }
-            col += 1;
+        // // style comments
+        if let Some(pos) = line.find("//") {
+            let comment_len = line.len() - pos;
+            tokens.push(RawToken {
+                line: line_idx as u32,
+                start: pos as u32,
+                length: comment_len as u32,
+                token_type: 8,
+                modifiers: 0,
+            });
         }
     }
 }

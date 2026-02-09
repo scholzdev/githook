@@ -233,7 +233,7 @@ fn infer_property_access_type(receiver: &Expression, property: &str) -> Option<S
 
 fn infer_method_return_type(method: &str) -> Option<String> {
     match method {
-        "upper" | "lower" | "trim" | "reverse" | "replace" | "slice" => Some("string".to_string()),
+        "upper" | "lower" | "trim" | "replace" | "slice" => Some("string".to_string()),
         "split" | "lines" => Some("array".to_string()),
         "len" | "count" => Some("number".to_string()),
         "contains" | "starts_with" | "ends_with" => Some("bool".to_string()),
@@ -670,24 +670,6 @@ fn get_array_method_completions() -> Vec<CompletionItem> {
             label: "last()".to_string(),
             kind: Some(CompletionItemKind::METHOD),
             detail: Some("Any - Last element".to_string()),
-            ..Default::default()
-        },
-        CompletionItem {
-            label: "reverse()".to_string(),
-            kind: Some(CompletionItemKind::METHOD),
-            detail: Some("Array - Reversed array".to_string()),
-            ..Default::default()
-        },
-        CompletionItem {
-            label: "sort()".to_string(),
-            kind: Some(CompletionItemKind::METHOD),
-            detail: Some("Array - Sorted array".to_string()),
-            ..Default::default()
-        },
-        CompletionItem {
-            label: "join(separator)".to_string(),
-            kind: Some(CompletionItemKind::METHOD),
-            detail: Some("String - Join with separator".to_string()),
             ..Default::default()
         },
     ]

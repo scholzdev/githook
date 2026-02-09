@@ -1,4 +1,5 @@
 use githook_syntax::ast::Statement;
+use githook_syntax::error::Span;
 
 pub fn extract_imports(statements: &[Statement]) -> Vec<ImportInfo> {
     let mut imports = Vec::new();
@@ -45,10 +46,11 @@ pub fn extract_macros(statements: &[Statement]) -> Vec<MacroInfo> {
 fn extract_macros_recursive(statements: &[Statement], macros: &mut Vec<MacroInfo>) {
     for stmt in statements {
         match stmt {
-            Statement::MacroDef { name, params, .. } => {
+            Statement::MacroDef { name, params, span, .. } => {
                 macros.push(MacroInfo {
                     name: name.clone(),
                     params: params.iter().cloned().collect(),
+                    span: *span,
                 });
             }
             Statement::Group { body, .. } => {
@@ -82,4 +84,5 @@ pub struct ImportInfo {
 pub struct MacroInfo {
     pub name: String,
     pub params: Vec<String>,
+    pub span: Span,
 }

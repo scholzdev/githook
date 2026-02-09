@@ -112,20 +112,19 @@ pub fn get_definition(
         for macro_info in &macros {
             if macro_info.name == macro_ref {
                 let start = Position {
-                    line: 0,
-                    character: 0,
+                    line: (macro_info.span.line.saturating_sub(1)) as u32,
+                    character: (macro_info.span.col.saturating_sub(1)) as u32,
                 };
                 let end = Position {
-                    line: 0,
-                    character: macro_info.name.len() as u32,
+                    line: (macro_info.span.line.saturating_sub(1)) as u32,
+                    character: (macro_info.span.col + macro_info.name.len()).saturating_sub(1) as u32,
                 };
 
                 let range = Range { start, end };
 
-                return Some(Location {
-                    uri: Url::parse("file:///dummy").unwrap(),
-                    range,
-                });
+                if let Ok(uri) = Url::parse(current_uri) {
+                    return Some(Location { uri, range });
+                }
             }
         }
     }

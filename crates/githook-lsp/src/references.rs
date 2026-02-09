@@ -23,19 +23,21 @@ pub fn find_references(
     }
 
     let word_start = line[..char_idx]
-        .rfind(|c: char| !c.is_alphanumeric() && c != '_' && c != '@' && c != ':')
+        .rfind(|c: char| !c.is_alphanumeric() && c != '_' && c != '@' && c != ':' && c != '.')
         .map(|p| p + 1)
         .unwrap_or(0);
 
     let word_end = char_idx
         + line[char_idx..]
-            .find(|c: char| !c.is_alphanumeric() && c != '_' && c != ':')
+            .find(|c: char| !c.is_alphanumeric() && c != '_' && c != ':' && c != '.')
             .unwrap_or(line[char_idx..].len());
 
     let word = &line[word_start..word_end];
 
     if let Some(macro_ref) = word.strip_prefix('@') {
-        let macro_name = if let Some(colon_pos) = macro_ref.find(':') {
+        let macro_name = if let Some(dot_pos) = macro_ref.find('.') {
+            &macro_ref[dot_pos + 1..]
+        } else if let Some(colon_pos) = macro_ref.find(':') {
             &macro_ref[colon_pos + 1..]
         } else {
             macro_ref

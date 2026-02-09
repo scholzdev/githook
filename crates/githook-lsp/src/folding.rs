@@ -91,21 +91,78 @@ fn collect_folding_ranges(stmt: &Statement, ranges: &mut Vec<FoldingRange>) {
                 });
             }
         }
+        Statement::Group { body, span, .. } => {
+            if !body.is_empty() {
+                let end_line = body
+                    .iter()
+                    .filter_map(get_statement_span)
+                    .map(|s| s.line)
+                    .max()
+                    .unwrap_or(span.line);
+
+                ranges.push(FoldingRange {
+                    start_line: (span.line - 1) as u32,
+                    start_character: None,
+                    end_line: (end_line - 1) as u32,
+                    end_character: None,
+                    kind: Some(FoldingRangeKind::Region),
+                    collapsed_text: None,
+                });
+            }
+
+            for inner_stmt in body {
+                collect_folding_ranges(inner_stmt, ranges);
+            }
+        }
+        Statement::Try { body, catch_body, span, .. } => {
+            let all_stmts: Vec<&Statement> = body.iter().chain(catch_body.iter()).collect();
+            if !all_stmts.is_empty() {
+                let end_line = all_stmts
+                    .iter()
+                    .filter_map(|s| get_statement_span(s))
+                    .map(|s| s.line)
+                    .max()
+                    .unwrap_or(span.line);
+
+                ranges.push(FoldingRange {
+                    start_line: (span.line - 1) as u32,
+                    start_character: None,
+                    end_line: (end_line - 1) as u32,
+                    end_character: None,
+                    kind: Some(FoldingRangeKind::Region),
+                    collapsed_text: None,
+                });
+            }
+
+            for inner_stmt in body {
+                collect_folding_ranges(inner_stmt, ranges);
+            }
+            for inner_stmt in catch_body {
+                collect_folding_ranges(inner_stmt, ranges);
+            }
+        }
+        Statement::Match { arms, span, .. } => {
+            if !arms.is_empty() {
+                let end_line = arms
+                    .iter()
+                    .map(|a| a.span.line)
+                    .max()
+                    .unwrap_or(span.line);
+
+                ranges.push(FoldingRange {
+                    start_line: (span.line - 1) as u32,
+                    start_character: None,
+                    end_line: (end_line - 1) as u32,
+                    end_character: None,
+                    kind: Some(FoldingRangeKind::Region),
+                    collapsed_text: None,
+                });
+            }
+        }
         _ => {}
     }
 }
 
 fn get_statement_span(stmt: &Statement) -> Option<githook_syntax::error::Span> {
-    use githook_syntax::ast::Statement::*;
-    match stmt {
-        Run { span, .. } => Some(*span),
-        Block { span, .. } => Some(*span),
-        Warn { span, .. } => Some(*span),
-        MacroDef { span, .. } => Some(*span),
-        MacroCall { span, .. } => Some(*span),
-        If { span, .. } => Some(*span),
-        ForEach { span, .. } => Some(*span),
-        Import { span, .. } => Some(*span),
-        _ => None,
-    }
+    Some(*stmt.span())
 }
