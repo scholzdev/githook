@@ -440,15 +440,11 @@ fn init_hooks() -> Result<()> {
 # Runs on every commit
 
 group "format-check" {
-    on "**/*.rs" {
-        run "cargo fmt --check"
-    }
+    run "cargo fmt --check"
 }
 
 group "lint" {
-    on "**/*.rs" {
-        run "cargo clippy -- -D warnings"
-    }
+    run "cargo clippy -- -D warnings"
 }
 "#;
         fs::write(&pre_commit_path, example_hook)

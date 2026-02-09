@@ -406,7 +406,6 @@ impl Value {
     /// Calls a method on this value (e.g. `string.contains("x")`).
     ///
     /// Delegates to the appropriate typed context.
-    #[allow(dead_code)]
     pub fn call_method(&self, name: &str, args: &[Value]) -> Result<Value> {
         match self {
             Value::String(s) => {

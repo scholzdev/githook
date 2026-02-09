@@ -137,8 +137,7 @@ is declared *inside* the braces with `var in`.
 
 ```ghook
 # Iterate all staged files
-foreach git.files.staged {
-    file in
+foreach git.files.staged { file in
     print file.name
 }
 ```
@@ -147,8 +146,7 @@ foreach git.files.staged {
 
 ```ghook
 # Only process Rust files
-foreach git.files.staged matching "*.rs" {
-    file in
+foreach git.files.staged matching "*.rs" { file in
     print "Checking ${file.name}"
 }
 ```
@@ -199,8 +197,7 @@ match git.branch.name {
 Match on file extensions:
 
 ```ghook
-foreach git.files.staged {
-    file in
+foreach git.files.staged { file in
     match file.extension {
         "rs" -> run "cargo clippy"
         "ts" -> run "eslint --quiet ."
