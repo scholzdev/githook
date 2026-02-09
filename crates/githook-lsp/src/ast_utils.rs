@@ -46,7 +46,9 @@ pub fn extract_macros(statements: &[Statement]) -> Vec<MacroInfo> {
 fn extract_macros_recursive(statements: &[Statement], macros: &mut Vec<MacroInfo>) {
     for stmt in statements {
         match stmt {
-            Statement::MacroDef { name, params, span, .. } => {
+            Statement::MacroDef {
+                name, params, span, ..
+            } => {
                 macros.push(MacroInfo {
                     name: name.clone(),
                     params: params.iter().cloned().collect(),

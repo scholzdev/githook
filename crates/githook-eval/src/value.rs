@@ -465,18 +465,19 @@ impl Value {
                 let refs: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
                 ctx.call_method(name, &refs)
             }
-            Some(Context::Http(_)) => {
+            Some(Context::Http(ctx)) => {
                 if args.len() != 1 {
                     bail!("http.{}() takes exactly 1 argument (url)", name);
                 }
                 let url = args[0].as_string()?;
-                match name {
-                    "get" => crate::builtins::builtin_http_get(&[Value::String(url)]),
-                    "post" => crate::builtins::builtin_http_post(&[Value::String(url)]),
-                    "put" => crate::builtins::builtin_http_put(&[Value::String(url)]),
-                    "delete" => crate::builtins::builtin_http_delete(&[Value::String(url)]),
-                    _ => bail!("Method 'http.{}' not found", name),
-                }
+                let timeout = std::time::Duration::from_secs(ctx.timeout_secs);
+                let auth_ref = ctx.auth_token.as_deref();
+                crate::builtins::http_request_with_config(
+                    &name.to_uppercase(),
+                    &[Value::String(url)],
+                    timeout,
+                    auth_ref,
+                )
             }
             _ => bail!("Method '{}' not found on {}", name, obj.type_name),
         }

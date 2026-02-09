@@ -4,12 +4,28 @@ use githook_macros::{callable_impl, docs};
 
 /// Marker context for the `http` built-in object.
 #[derive(Debug, Clone, Default)]
-pub struct HttpContext;
+pub struct HttpContext {
+    /// Timeout for HTTP requests.
+    pub timeout_secs: u64,
+    /// Optional bearer token for authentication.
+    pub auth_token: Option<String>,
+}
 
 impl HttpContext {
-    /// Creates a new HTTP context.
+    /// Creates a new HTTP context with default settings.
     pub fn new() -> Self {
-        Self
+        Self {
+            timeout_secs: 30,
+            auth_token: None,
+        }
+    }
+
+    /// Creates an HTTP context with the given timeout and auth token.
+    pub fn with_config(timeout_secs: u64, auth_token: Option<String>) -> Self {
+        Self {
+            timeout_secs,
+            auth_token,
+        }
     }
 }
 

@@ -22,7 +22,15 @@ impl Executor {
             Expression::Identifier(name, span) => match name.as_str() {
                 "git" => Ok(self.create_git_object()),
                 "env" => Ok(Value::env_object()),
-                "http" => Ok(Value::http_object()),
+                "http" => {
+                    let http_ctx = crate::contexts::HttpContext::with_config(
+                        self.config.http_timeout.as_secs(),
+                        self.config.auth_token.clone(),
+                    );
+                    Ok(Value::Object(
+                        crate::value::Object::new("Http").with_http_context(http_ctx),
+                    ))
+                }
                 _ => self.variables.get(name).cloned().ok_or_else(|| {
                     anyhow::anyhow!(crate::error::EvalError::spanned(
                         format!("Variable '{}' not found", name),

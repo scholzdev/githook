@@ -14,6 +14,7 @@ use std::process::Command;
 
 use crate::bail_span;
 use crate::builtins::BuiltinRegistry;
+use crate::config::Config;
 use crate::control_flow::ExecutionResult;
 use crate::value::Value;
 use githook_syntax::ast::{MatchPattern, Severity, Statement};
@@ -68,6 +69,8 @@ pub struct Executor {
     /// Results from `group` checks.
     pub check_results: Vec<CheckResult>,
     builtins: BuiltinRegistry,
+    /// Runtime configuration.
+    pub config: Config,
 }
 
 impl Executor {
@@ -84,12 +87,19 @@ impl Executor {
             namespaced_macros: FxHashMap::default(),
             check_results: Vec::new(),
             builtins: BuiltinRegistry::new(),
+            config: Config::default(),
         }
     }
 
     /// Builder: pre-loads staged git files for the `git.files.*` context.
     pub fn with_git_files(mut self, files: Vec<String>) -> Self {
         self.git_files = files;
+        self
+    }
+
+    /// Builder: sets the runtime configuration.
+    pub fn with_config(mut self, config: Config) -> Self {
+        self.config = config;
         self
     }
 
@@ -171,30 +181,26 @@ impl Executor {
                 let interpolated = interpolated?;
                 let span = *span;
                 let verbose = self.verbose;
+                let timeout = self.config.command_timeout;
 
-                let results: Vec<Result<std::process::Output>> = interpolated
-                    .par_iter()
-                    .map(|cmd| {
-                        if verbose {
-                            println!("> Running: {}", cmd);
-                        }
-                        let output = Command::new("sh")
-                            .arg("-c")
-                            .arg(cmd)
-                            .output()
-                            .with_context(|| format!("Failed to execute: {}", cmd))?;
-
-                        if !output.status.success() {
-                            bail_span!(
-                                span,
-                                "Command failed: {}\nstderr: {}",
-                                cmd,
-                                String::from_utf8_lossy(&output.stderr)
-                            );
-                        }
-                        Ok(output)
+                // If max_parallel_threads > 0, use a custom thread pool
+                let results: Vec<Result<std::process::Output>> = if self.config.max_parallel_threads > 0 {
+                    let pool = rayon::ThreadPoolBuilder::new()
+                        .num_threads(self.config.max_parallel_threads)
+                        .build()
+                        .context("Failed to create thread pool")?;
+                    pool.install(|| {
+                        interpolated
+                            .par_iter()
+                            .map(|cmd| Self::run_parallel_command(cmd, span, verbose, timeout))
+                            .collect()
                     })
-                    .collect();
+                } else {
+                    interpolated
+                        .par_iter()
+                        .map(|cmd| Self::run_parallel_command(cmd, span, verbose, timeout))
+                        .collect()
+                };
 
                 for result in results {
                     let output = result?;
@@ -454,8 +460,14 @@ impl Executor {
                 let namespace = parts[0];
                 let name = parts[1];
 
-                let source = crate::package_resolver::load_package(namespace, name)
-                    .with_context(|| format!("Failed to load package: {}", package))?;
+                let source = crate::package_resolver::load_package(
+                    namespace,
+                    name,
+                    &self.config.package_remote_url,
+                    &self.config.package_remote_type,
+                    self.config.package_access_token.as_deref(),
+                )
+                .with_context(|| format!("Failed to load package: {}", package))?;
 
                 let tokens = githook_syntax::lexer::tokenize(&source)
                     .with_context(|| format!("Failed to tokenize package: {}", package))?;
@@ -668,7 +680,7 @@ impl Executor {
             .spawn()
             .context(format!("Failed to execute command: {}", cmd))?;
 
-        let timeout = std::time::Duration::from_secs(30);
+        let timeout = self.config.command_timeout;
         let start = std::time::Instant::now();
 
         loop {
@@ -684,6 +696,57 @@ impl Executor {
                         print!("{}", stdout);
                     }
                     return Ok(());
+                }
+                Ok(None) => {
+                    if start.elapsed() > timeout {
+                        let _ = child.kill();
+                        bail_span!(
+                            span,
+                            "Command timed out after {} seconds: {}",
+                            timeout.as_secs(),
+                            cmd
+                        );
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(e) => bail_span!(span, "Error waiting for command: {}", e),
+            }
+        }
+    }
+
+    /// Run a single command inside a `parallel` block (called from rayon threads).
+    fn run_parallel_command(
+        cmd: &str,
+        span: Span,
+        verbose: bool,
+        timeout: std::time::Duration,
+    ) -> Result<std::process::Output> {
+        if verbose {
+            println!("> Running: {}", cmd);
+        }
+
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg(cmd)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .with_context(|| format!("Failed to execute: {}", cmd))?;
+
+        let start = std::time::Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => {
+                    let output = child.wait_with_output()?;
+                    if !output.status.success() {
+                        bail_span!(
+                            span,
+                            "Command failed: {}\nstderr: {}",
+                            cmd,
+                            String::from_utf8_lossy(&output.stderr)
+                        );
+                    }
+                    return Ok(output);
                 }
                 Ok(None) => {
                     if start.elapsed() > timeout {

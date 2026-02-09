@@ -190,6 +190,16 @@ pub fn builtin_http_delete(args: &[Value]) -> Result<Value> {
 }
 
 fn http_request(method: &str, args: &[Value]) -> Result<Value> {
+    http_request_with_config(method, args, std::time::Duration::from_secs(30), None)
+}
+
+/// Perform an HTTP request with configurable timeout and optional auth token.
+pub fn http_request_with_config(
+    method: &str,
+    args: &[Value],
+    timeout: std::time::Duration,
+    auth_token: Option<&str>,
+) -> Result<Value> {
     if args.len() != 1 {
         bail!(
             "http.{}() takes exactly 1 argument, got {}",
@@ -204,18 +214,24 @@ fn http_request(method: &str, args: &[Value]) -> Result<Value> {
     };
 
     let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(timeout)
         .user_agent("githook/1.0")
         .build()
         .context("Failed to create HTTP client")?;
 
-    let response = match method {
+    let mut request = match method {
         "GET" => client.get(&url),
         "POST" => client.post(&url),
         "PUT" => client.put(&url),
         "DELETE" => client.delete(&url),
         _ => bail!("Unsupported HTTP method: {}", method),
+    };
+
+    if let Some(token) = auth_token {
+        request = request.bearer_auth(token);
     }
+
+    let response = request
     .send()
     .with_context(|| format!("Failed to send HTTP request to {}", url))?;
 

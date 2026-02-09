@@ -8,6 +8,8 @@
 
 /// Built-in functions (`file`, `dir`, `glob`, `exec`, `rm`).
 pub mod builtins;
+/// Runtime configuration (timeouts, parallelism, auth).
+pub mod config;
 /// Context types for the Git object model (`git.branch`, `git.files`, etc.).
 pub mod contexts;
 /// Loop and block control flow.
@@ -24,6 +26,7 @@ pub mod value;
 /// Remote package resolution.
 pub mod package_resolver;
 
+pub use config::Config;
 pub use control_flow::ExecutionResult;
 pub use error::EvalError;
 pub use executor::{CheckResult, CheckStatus, Executor};

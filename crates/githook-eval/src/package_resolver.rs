@@ -95,8 +95,21 @@ fn validate_repo_url(repo_url: &str) -> Result<()> {
     Ok(())
 }
 
-/// Loads a package's source code, downloading from GitHub if not cached.
-pub fn load_package(namespace: &str, name: &str) -> Result<String> {
+/// Loads a package's source code, downloading from GitHub/GitLab if not cached.
+///
+/// # Arguments
+/// * `namespace` - Package namespace (e.g., "std", "testing")
+/// * `name` - Package name
+/// * `remote_url` - Repository URL (e.g., "owner/repo" for GitHub, "gitlab.com/owner/repo" for GitLab)
+/// * `remote_type` - Repository type ("github" or "gitlab")
+/// * `access_token` - Optional access token for private repositories
+pub fn load_package(
+    namespace: &str,
+    name: &str,
+    remote_url: &str,
+    remote_type: &str,
+    access_token: Option<&str>,
+) -> Result<String> {
     let cache_key = format!("{}::{}", namespace, name);
 
     if let Ok(mut cache) = PACKAGE_CACHE.lock()
@@ -119,26 +132,53 @@ pub fn load_package(namespace: &str, name: &str) -> Result<String> {
             );
         }
     } else {
-        let repo_url = get_default_repo_url(namespace);
-        validate_repo_url(&repo_url)?;
+        validate_repo_url(remote_url)?;
 
-        let url = format!(
-            "https://raw.githubusercontent.com/{}/refs/heads/main/{}/{}/{}.ghook",
-            repo_url, namespace, name, name
-        );
+        // Build URL based on remote type
+        let url = match remote_type {
+            "github" => format!(
+                "https://raw.githubusercontent.com/{}/refs/heads/main/{}/{}/{}.ghook",
+                remote_url, namespace, name, name
+            ),
+            "gitlab" => {
+                // GitLab format: gitlab.com/owner/repo -> https://gitlab.com/owner/repo/-/raw/main/...
+                if remote_url.starts_with("gitlab.com/") {
+                    let repo_path = remote_url.strip_prefix("gitlab.com/").unwrap();
+                    format!(
+                        "https://gitlab.com/{}/-/raw/main/{}/{}/{}.ghook",
+                        repo_path, namespace, name, name
+                    )
+                } else {
+                    // Assume it's owner/repo and use gitlab.com
+                    format!(
+                        "https://gitlab.com/{}/-/raw/main/{}/{}/{}.ghook",
+                        remote_url, namespace, name, name
+                    )
+                }
+            }
+            _ => bail!("Unsupported remote type: '{}'. Use 'github' or 'gitlab'.", remote_type),
+        };
 
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()?;
 
+        // Helper to add auth header if token is present
+        let build_request = |url: &str| {
+            let mut req = client.get(url);
+            if let Some(token) = access_token {
+                req = req.bearer_auth(token);
+            }
+            req
+        };
+
         if path.exists() && etag_path.exists() {
             let cached_etag = fs::read_to_string(&etag_path).ok();
 
             if let Some(etag) = cached_etag {
-                let response = client
-                    .get(&url)
-                    .header("If-None-Match", etag.trim())
-                    .send()?;
+                let mut request = build_request(&url);
+                request = request.header("If-None-Match", etag.trim());
+                let response = request.send()?;
 
                 if response.status() == 304 {
                     if cfg!(debug_assertions) {
@@ -172,7 +212,7 @@ pub fn load_package(namespace: &str, name: &str) -> Result<String> {
                     bail!("Failed to fetch package: HTTP {}", response.status());
                 }
             } else {
-                let response = client.get(&url).send()?;
+                let response = build_request(&url).send()?;
 
                 if !response.status().is_success() {
                     bail!(
@@ -207,7 +247,7 @@ pub fn load_package(namespace: &str, name: &str) -> Result<String> {
         } else {
             eprintln!("Fetching package @{}/{}...", namespace, name);
 
-            let response = client.get(&url).send()?;
+            let response = build_request(&url).send()?;
 
             if !response.status().is_success() {
                 bail!(
@@ -248,7 +288,13 @@ pub fn load_package(namespace: &str, name: &str) -> Result<String> {
     Ok(content)
 }
 
-pub async fn load_or_fetch_package(namespace: &str, name: &str, repo_url: &str) -> Result<String> {
+pub async fn load_or_fetch_package(
+    namespace: &str,
+    name: &str,
+    repo_url: &str,
+    remote_type: &str,
+    access_token: Option<&str>,
+) -> Result<String> {
     let path = resolve_package_path(namespace, name)?;
 
     if path.exists() {
@@ -265,10 +311,28 @@ pub async fn load_or_fetch_package(namespace: &str, name: &str, repo_url: &str) 
 
     validate_repo_url(repo_url)?;
 
-    let url = format!(
-        "https://raw.githubusercontent.com/{}/refs/heads/main/{}/{}/{}.ghook",
-        repo_url, namespace, name, name
-    );
+    // Build URL based on remote type
+    let url = match remote_type {
+        "github" => format!(
+            "https://raw.githubusercontent.com/{}/refs/heads/main/{}/{}/{}.ghook",
+            repo_url, namespace, name, name
+        ),
+        "gitlab" => {
+            if repo_url.starts_with("gitlab.com/") {
+                let repo_path = repo_url.strip_prefix("gitlab.com/").unwrap();
+                format!(
+                    "https://gitlab.com/{}/-/raw/main/{}/{}/{}.ghook",
+                    repo_path, namespace, name, name
+                )
+            } else {
+                format!(
+                    "https://gitlab.com/{}/-/raw/main/{}/{}/{}.ghook",
+                    repo_url, namespace, name, name
+                )
+            }
+        }
+        _ => bail!("Unsupported remote type: '{}'. Use 'github' or 'gitlab'.", remote_type),
+    };
 
     eprintln!("Fetching package from: {}", url);
 
@@ -276,7 +340,12 @@ pub async fn load_or_fetch_package(namespace: &str, name: &str, repo_url: &str) 
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
 
-    let response = client.get(&url).send().await?;
+    let mut request = client.get(&url);
+    if let Some(token) = access_token {
+        request = request.bearer_auth(token);
+    }
+
+    let response = request.send().await?;
 
     if !response.status().is_success() {
         bail!(
@@ -296,9 +365,4 @@ pub async fn load_or_fetch_package(namespace: &str, name: &str, repo_url: &str) 
     fs::write(&path, &content)?;
 
     Ok(content)
-}
-
-/// Returns the default GitHub repository URL for a package namespace.
-pub fn get_default_repo_url(_namespace: &str) -> String {
-    "scholzdev/githooks-packages".to_string()
 }

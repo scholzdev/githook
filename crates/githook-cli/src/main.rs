@@ -8,10 +8,10 @@
 mod errors;
 mod updater;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
 use colored::*;
-use githook_eval::{ExecutionResult, Executor};
+use githook_eval::{Config, ExecutionResult, Executor};
 use githook_syntax::{lexer, parser};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -40,6 +40,22 @@ enum Commands {
     CheckUpdate,
     Update,
     Init,
+    #[command(about = "Get or set configuration values")]
+    Config {
+        /// Configuration key (e.g., command_timeout, package_remote_url)
+        key: Option<String>,
+        /// Value to set (omit to get current value)
+        value: Option<String>,
+        /// List all configuration values
+        #[arg(short, long)]
+        list: bool,
+        /// Remove a configuration value
+        #[arg(short, long)]
+        unset: bool,
+        /// Use global config (~/.ghrc) instead of local (.ghrc)
+        #[arg(short, long)]
+        global: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -51,6 +67,13 @@ fn main() -> Result<()> {
             Commands::CheckUpdate => updater::check_for_updates(),
             Commands::Update => updater::perform_update(),
             Commands::Init => init_hooks(),
+            Commands::Config {
+                key,
+                value,
+                list,
+                unset,
+                global,
+            } => handle_config(key, value, list, unset, global),
         };
     }
 
@@ -115,7 +138,18 @@ fn main() -> Result<()> {
 
     let git_files = get_git_files(&hook_type)?;
 
-    let mut executor = Executor::new().with_git_files(git_files);
+    let config = Config::load(".").unwrap_or_else(|e| {
+        eprintln!(
+            "{} Failed to load config: {}",
+            "⚠".yellow().bold(),
+            e
+        );
+        Config::default()
+    });
+
+    let mut executor = Executor::new()
+        .with_config(config)
+        .with_git_files(git_files);
 
     let result = match executor.execute_statements(&statements) {
         Ok(res) => res,
@@ -464,6 +498,239 @@ group "lint" {
     println!(
         "  Run {} to create a config file",
         "githook init --config".cyan()
+    );
+
+    Ok(())
+}
+
+fn handle_config(
+    key: Option<String>,
+    value: Option<String>,
+    list: bool,
+    unset: bool,
+    global: bool,
+) -> Result<()> {
+    // Determine config file path
+    let config_path = if global {
+        dirs::home_dir()
+            .ok_or_else(|| anyhow!("Could not determine home directory"))?
+            .join(".ghrc")
+    } else {
+        // Find local .ghrc starting from current directory
+        find_local_ghrc().unwrap_or_else(|| PathBuf::from(".ghrc"))
+    };
+
+    // List all config values
+    if list {
+        return list_config(&config_path, global);
+    }
+
+    // Must have a key for other operations
+    let key = key.ok_or_else(|| {
+        anyhow!(
+            "Missing key. Usage:\n  \
+            githook config <key>           - get value\n  \
+            githook config <key> <value>   - set value\n  \
+            githook config --list          - list all values\n  \
+            githook config --unset <key>   - remove value"
+        )
+    })?;
+
+    // Unset (remove) a value
+    if unset {
+        return unset_config(&config_path, &key, global);
+    }
+
+    // Get or set value
+    if let Some(val) = value {
+        set_config(&config_path, &key, &val, global)
+    } else {
+        get_config(&config_path, &key, global)
+    }
+}
+
+fn find_local_ghrc() -> Option<PathBuf> {
+    let mut dir = std::env::current_dir().ok()?;
+    loop {
+        let ghrc = dir.join(".ghrc");
+        if ghrc.is_file() {
+            return Some(ghrc);
+        }
+        let githook_ghrc = dir.join(".githook").join(".ghrc");
+        if githook_ghrc.is_file() {
+            return Some(githook_ghrc);
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+}
+
+fn list_config(config_path: &Path, global: bool) -> Result<()> {
+    if !config_path.exists() {
+        let scope = if global { "global" } else { "local" };
+        println!("{} No {} config file found", "ℹ".cyan(), scope);
+        println!("  Location: {}", config_path.display());
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(config_path)
+        .with_context(|| format!("Failed to read {}", config_path.display()))?;
+
+    let config: toml::Value = toml::from_str(&content)
+        .with_context(|| format!("Failed to parse {}", config_path.display()))?;
+
+    let scope = if global { "global" } else { "local" };
+    println!(
+        "{} Configuration ({}): {}",
+        "".cyan().bold(),
+        scope,
+        config_path.display()
+    );
+    println!();
+
+    if let Some(table) = config.as_table() {
+        for (key, value) in table {
+            let value_str = match value {
+                toml::Value::String(s) => {
+                    // Mask tokens partially
+                    if key.contains("token") || key.contains("auth") {
+                        if s.len() > 8 {
+                            format!("{}...{}", &s[..4], &s[s.len() - 4..])
+                        } else {
+                            "***".to_string()
+                        }
+                    } else {
+                        s.clone()
+                    }
+                }
+                toml::Value::Integer(i) => i.to_string(),
+                toml::Value::Float(f) => f.to_string(),
+                toml::Value::Boolean(b) => b.to_string(),
+                _ => format!("{:?}", value),
+            };
+            println!("  {} = {}", key.cyan(), value_str);
+        }
+    }
+
+    Ok(())
+}
+
+fn get_config(config_path: &Path, key: &str, global: bool) -> Result<()> {
+    if !config_path.exists() {
+        let scope = if global { "global" } else { "local" };
+        bail!("No {} config file found at {}", scope, config_path.display());
+    }
+
+    let content = fs::read_to_string(config_path)
+        .with_context(|| format!("Failed to read {}", config_path.display()))?;
+
+    let config: toml::Value = toml::from_str(&content)
+        .with_context(|| format!("Failed to parse {}", config_path.display()))?;
+
+    if let Some(table) = config.as_table() {
+        if let Some(value) = table.get(key) {
+            let value_str = match value {
+                toml::Value::String(s) => s.clone(),
+                toml::Value::Integer(i) => i.to_string(),
+                toml::Value::Float(f) => f.to_string(),
+                toml::Value::Boolean(b) => b.to_string(),
+                _ => format!("{:?}", value),
+            };
+            println!("{}", value_str);
+            return Ok(());
+        }
+    }
+
+    bail!("Config key '{}' not found", key);
+}
+
+fn set_config(config_path: &Path, key: &str, value: &str, global: bool) -> Result<()> {
+    // Read existing config or create empty
+    let mut config: toml::Value = if config_path.exists() {
+        let content = fs::read_to_string(config_path)
+            .with_context(|| format!("Failed to read {}", config_path.display()))?;
+        toml::from_str(&content)
+            .with_context(|| format!("Failed to parse {}", config_path.display()))?
+    } else {
+        toml::Value::Table(toml::map::Map::new())
+    };
+
+    // Parse value (try to infer type)
+    let parsed_value = if let Ok(num) = value.parse::<i64>() {
+        toml::Value::Integer(num)
+    } else if let Ok(boolean) = value.parse::<bool>() {
+        toml::Value::Boolean(boolean)
+    } else if let Ok(float) = value.parse::<f64>() {
+        toml::Value::Float(float)
+    } else {
+        toml::Value::String(value.to_string())
+    };
+
+    // Set the value
+    if let Some(table) = config.as_table_mut() {
+        table.insert(key.to_string(), parsed_value);
+    }
+
+    // Create parent directory if needed
+    if let Some(parent) = config_path.parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+
+    // Write back
+    let toml_string = toml::to_string_pretty(&config)?;
+    fs::write(config_path, toml_string)
+        .with_context(|| format!("Failed to write {}", config_path.display()))?;
+
+    let scope = if global { "global" } else { "local" };
+    println!(
+        "{} Set {} config: {} = {}",
+        "".green().bold(),
+        scope,
+        key.cyan(),
+        value
+    );
+    println!("  Location: {}", config_path.display());
+
+    Ok(())
+}
+
+fn unset_config(config_path: &Path, key: &str, global: bool) -> Result<()> {
+    if !config_path.exists() {
+        let scope = if global { "global" } else { "local" };
+        bail!("No {} config file found at {}", scope, config_path.display());
+    }
+
+    let content = fs::read_to_string(config_path)
+        .with_context(|| format!("Failed to read {}", config_path.display()))?;
+
+    let mut config: toml::Value = toml::from_str(&content)
+        .with_context(|| format!("Failed to parse {}", config_path.display()))?;
+
+    // Remove the key
+    let removed = if let Some(table) = config.as_table_mut() {
+        table.remove(key).is_some()
+    } else {
+        false
+    };
+
+    if !removed {
+        bail!("Config key '{}' not found", key);
+    }
+
+    // Write back
+    let toml_string = toml::to_string_pretty(&config)?;
+    fs::write(config_path, toml_string)
+        .with_context(|| format!("Failed to write {}", config_path.display()))?;
+
+    let scope = if global { "global" } else { "local" };
+    println!(
+        "{} Removed {} config: {}",
+        "".green().bold(),
+        scope,
+        key.cyan()
     );
 
     Ok(())

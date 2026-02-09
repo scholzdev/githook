@@ -117,7 +117,8 @@ pub fn get_definition(
                 };
                 let end = Position {
                     line: (macro_info.span.line.saturating_sub(1)) as u32,
-                    character: (macro_info.span.col + macro_info.name.len()).saturating_sub(1) as u32,
+                    character: (macro_info.span.col + macro_info.name.len()).saturating_sub(1)
+                        as u32,
                 };
 
                 let range = Range { start, end };

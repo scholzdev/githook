@@ -114,7 +114,12 @@ fn collect_folding_ranges(stmt: &Statement, ranges: &mut Vec<FoldingRange>) {
                 collect_folding_ranges(inner_stmt, ranges);
             }
         }
-        Statement::Try { body, catch_body, span, .. } => {
+        Statement::Try {
+            body,
+            catch_body,
+            span,
+            ..
+        } => {
             let all_stmts: Vec<&Statement> = body.iter().chain(catch_body.iter()).collect();
             if !all_stmts.is_empty() {
                 let end_line = all_stmts
@@ -143,11 +148,7 @@ fn collect_folding_ranges(stmt: &Statement, ranges: &mut Vec<FoldingRange>) {
         }
         Statement::Match { arms, span, .. } => {
             if !arms.is_empty() {
-                let end_line = arms
-                    .iter()
-                    .map(|a| a.span.line)
-                    .max()
-                    .unwrap_or(span.line);
+                let end_line = arms.iter().map(|a| a.span.line).max().unwrap_or(span.line);
 
                 ranges.push(FoldingRange {
                     start_line: (span.line - 1) as u32,
